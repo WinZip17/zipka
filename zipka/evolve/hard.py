@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from zipka.config import ROOT_DIR, Settings, ensure_data_dirs, get_settings
-from zipka.evolve.patch_build import materialize_patch, number_lines
+from zipka.evolve.patch_build import materialize_patch, number_lines, parse_patch_response
 from zipka.memory.store import MemoryStore
 
 APPROVE_PHRASE = "разрешаю правку кода"
@@ -61,21 +61,33 @@ FRONTEND_EDIT_RULES = """
 """.strip()
 
 PATCH_SYSTEM = """
-Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON без markdown и без пояснений.
+Ты модуль hard-evolve Зипки. Верни ТОЛЬКО патч, без пояснений и без markdown.
 
-Формат (точечные правки существующего файла):
-{"files":[{"path":"relative/path.ext","edits":[{"old":"точный уникальный фрагмент ИЗ ФАЙЛА","new":"замена"}]}]}
+Предпочтительный формат (безопасно для кавычек в коде):
+<<<FILE relative/path.ext>>>
+<<<OLD>>>
+точный короткий фрагмент из файла (3–12 строк, 1:1 с отступами)
+<<<NEW>>>
+тот же фрагмент с минимальной правкой
+<<<END>>>
 
-Для НОВОГО файла:
-{"files":[{"path":"relative/path.ext","content":"полный текст"}]}
+Несколько правок в одном файле — повтори <<<OLD>>>/<<<NEW>>> перед <<<END>>>.
+Новый файл:
+<<<FILE relative/path.ext>>>
+<<<CONTENT>>>
+полный текст
+<<<END>>>
+
+Альтернатива — JSON (только если умеешь экранировать кавычки как \\" и переносы как \\n):
+{"files":[{"path":"relative/path.ext","edits":[{"old":"...","new":"..."}]}]}
 
 Правила:
-- old копируй 1:1 из текущего файла (включая отступы), встречается ровно 1 раз.
-- Обычно 1–2 файла и 1–5 edits. Не дублируй весь файл в content, если файл уже есть.
-- Большую фичу делай МИНИМАЛЬНЫМ шагом: заготовка/хук/вызов, не весь пайплайн целиком.
+- old встречается в файле ровно 1 раз; НЕ копируй весь класс/файл — только место вставки.
+- ЗАПРЕЩЕНО копировать номера строк «12|» в old/new.
+- Если в запросе указан путь — правь ИМЕННО его.
+- Один минимальный шаг (заготовка/хук), не весь пайплайн.
 - Не трогай .env, secrets, node_modules, dist.
-- Синтаксис должен остаться валидным (скобки, кавычки, JSX).
-- Если не можешь сделать правку — верни {"files":[]} (но лучше маленький рабочий шаг).
+- Синтаксис после правки должен остаться валидным.
 """.strip()
 
 
@@ -432,7 +444,7 @@ class HardEvolve:
                 if abs_path.is_file() and abs_path.stat().st_size < 120_000:
                     body = abs_path.read_text(encoding="utf-8", errors="ignore")
                     originals[rel.replace("\\", "/")] = body
-                    numbered = number_lines(body, max_chars=14_000)
+                    numbered = number_lines(body, max_chars=9_000)
                     focus_blobs.append(
                         "### " + rel + "\n```\n" + numbered + "\n```"
                     )
@@ -489,8 +501,10 @@ class HardEvolve:
             )
         user_content += (
             "Сделай ОДИН минимальный рабочий шаг под запрос "
-            "(например хук вызова / заготовка модуля), не весь продукт сразу.\n"
-            "Ответ — только JSON.\n\n"
+            "(например хук вызова / заготовка метода), не весь продукт сразу.\n"
+            "Ответ — только патч в формате <<<FILE>>>…<<<END>>> "
+            "(или валидный JSON, если без сырых кавычек).\n"
+            "old = 3–12 строк рядом с местом правки, не весь класс.\n\n"
             "Другие доступные пути (не читай все — только если нужно):\n"
             + "\n".join(tree[:40])
         )
@@ -505,8 +519,10 @@ class HardEvolve:
                     user_content
                     + "\n\nПРЕДЫДУЩИЙ ПАТЧ ОТКЛОНЁН:\n"
                     + last_error
-                    + "\nВерни новый JSON. old должен точно совпадать с файлом. "
-                    "Без markdown, без текста вокруг JSON."
+                    + "\nВерни патч заново в формате <<<FILE path>>> / <<<OLD>>> / "
+                    "<<<NEW>>> / <<<END>>>. "
+                    "old — короткий точный фрагмент (без номеров строк). "
+                    "Без markdown и без текста вокруг."
                 )
             messages: list[dict[str, str]] = [
                 {"role": "system", "content": system},
@@ -515,8 +531,8 @@ class HardEvolve:
             try:
                 raw = self.llm.chat(
                     messages,
-                    temperature=0.15,
-                    max_tokens=3072,
+                    temperature=0.1,
+                    max_tokens=4096,
                 )
             except TypeError:
                 raw = self.llm.chat(messages)
@@ -525,7 +541,7 @@ class HardEvolve:
                 files = materialize_patch(
                     {},
                     raw=raw,
-                    extract_json=_extract_json,
+                    extract_json=parse_patch_response,
                     base=base,
                     originals=originals,
                     blocked_names=BLOCKED_NAMES,
@@ -540,9 +556,12 @@ class HardEvolve:
         if not files:
             tip = last_error or "Не удалось сформировать безопасный патч."
             preview = re.sub(r"\s+", " ", raw_last).strip()[:280]
-            if preview and "files[].edits" in tip:
+            looks_broken_json = bool(
+                re.search(r'\{\s*"files"\s*:', raw_last or "")
+            ) and "files[].edits" in tip
+            if preview and ("files[].edits" in tip or looks_broken_json):
                 tip += (
-                    f"\nМодель ответила не JSON-патчем (начало: «{preview}»). "
+                    f"\nМодель ответила битым/неприменимым патчем (начало: «{preview}»). "
                     "Уточни файл и маленький шаг: например "
                     "«в zipka/sensors/eyes.py добавь функцию detect_faces»."
                 )
@@ -756,6 +775,19 @@ class HardEvolve:
         self, request: str, tree: list[str], *, limit: int = 4
     ) -> list[str]:
         lowered = request.lower()
+        tree_norm = {rel.replace("\\", "/"): rel for rel in tree}
+        explicit: list[str] = []
+        # явные пути в запросе: zipka/sensors/eyes.py, sensors/eyes.py, ...
+        for m in re.finditer(
+            r"(?:^|[\s\"'`(])((?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+)(?=$|[\s\"'`:),])",
+            request.replace("\\", "/"),
+        ):
+            cand = m.group(1).lstrip("./")
+            for key, orig in tree_norm.items():
+                if key == cand or key.endswith("/" + cand) or key.endswith(cand):
+                    if orig not in explicit:
+                        explicit.append(orig)
+                    break
         scored: list[tuple[int, str]] = []
         hints = [
             ("composer", 50),
@@ -899,6 +931,13 @@ class HardEvolve:
                     break
             if not normalized:
                 normalized = tree[:1]
+        # явный путь из запроса — всегда первым
+        if explicit:
+            merged: list[str] = []
+            for e in explicit + normalized:
+                if e not in merged:
+                    merged.append(e)
+            normalized = merged
         return normalized[:limit]
 
     def _frontend_style_problems(self, rel: str, content: str) -> str | None:
@@ -970,15 +1009,4 @@ class HardEvolve:
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
+    return parse_patch_response(text)

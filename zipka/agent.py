@@ -932,7 +932,8 @@ class Zipka:
         return (
             f"{text}\n\n"
             "Контекст: реализуй план из предыдущего ответа Зипки как hard-evolve "
-            "патч (JSON files[].edits), не текст с примером.\n"
+            "патч (<<<FILE>>>/<<<OLD>>>/<<<NEW>>> или JSON files[].edits), "
+            "не текст с примером.\n"
             f"План:\n{last_bot[:3500]}"
         )
 
