@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     ollama_vision_model: str = ""
     # auto | gguf | ollama — auto берёт .gguf из data/models, иначе Ollama
     zipka_llm_backend: str = "auto"
-    zipka_gguf_model: str = ""  # имя файла в data/models, пусто = новейший .gguf
+    zipka_gguf_model: str = ""  # имя файла в data/models, пусто = по профилю чата
+    # pathfinder | qwen25 — какой чатовый GGUF-профиль активен (см. chat_models)
+    zipka_chat_model: str = "pathfinder"
     zipka_gguf_ctx: int = 8192
     zipka_gguf_max_tokens: int = 1024
     zipka_gguf_gpu_layers: int = 0  # >0 если собрали llama-cpp с GPU

@@ -13,6 +13,7 @@ ComputeMode = Literal["cpu", "gpu", "hybrid"]
 DEFAULT_RUNTIME: dict[str, Any] = {
     "compute_mode": "cpu",
     "gpu_layers": 24,
+    "chat_model_id": "pathfinder",
 }
 
 
@@ -44,6 +45,10 @@ def load_runtime(settings: Settings | None = None) -> dict[str, Any]:
         out["gpu_layers"] = max(1, min(int(out.get("gpu_layers") or 24), 128))
     except (TypeError, ValueError):
         out["gpu_layers"] = 24
+    chat_id = str(out.get("chat_model_id") or "pathfinder").strip().lower()
+    if chat_id not in {"pathfinder", "qwen25"}:
+        chat_id = "pathfinder"
+    out["chat_model_id"] = chat_id
     return out
 
 
@@ -56,6 +61,11 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current["compute_mode"] = mode
     if "gpu_layers" in patch and patch["gpu_layers"] is not None:
         current["gpu_layers"] = max(1, min(int(patch["gpu_layers"]), 128))
+    if "chat_model_id" in patch and patch["chat_model_id"] is not None:
+        chat_id = str(patch["chat_model_id"]).strip().lower()
+        if chat_id not in {"pathfinder", "qwen25"}:
+            raise ValueError("chat_model_id: pathfinder | qwen25")
+        current["chat_model_id"] = chat_id
     path = _runtime_path(settings)
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return current

@@ -34,6 +34,7 @@ import {
   resetInfo,
   resetLearning,
   sendChat,
+  setChatModel,
   setCompute,
   type StatusResponse,
 } from "../api";
@@ -148,6 +149,9 @@ export function SidePanel({
   const [gpuLayers, setGpuLayers] = useState(24);
   const [computeBusy, setComputeBusy] = useState(false);
   const [computeMsg, setComputeMsg] = useState<string | null>(null);
+  const [chatModelId, setChatModelId] = useState("pathfinder");
+  const [chatModelBusy, setChatModelBusy] = useState(false);
+  const [chatModelMsg, setChatModelMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const c = status?.compute;
@@ -156,6 +160,11 @@ export function SidePanel({
     if (m === "cpu" || m === "gpu" || m === "hybrid") setComputeMode(m);
     if (typeof c.gpu_layers === "number") setGpuLayers(c.gpu_layers);
   }, [status?.compute]);
+
+  useEffect(() => {
+    const id = status?.chat_models?.active_id;
+    if (id) setChatModelId(id);
+  }, [status?.chat_models?.active_id]);
 
   const applyCompute = async () => {
     setComputeBusy(true);
@@ -178,6 +187,24 @@ export function SidePanel({
       setComputeMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setComputeBusy(false);
+    }
+  };
+
+  const applyChatModel = async () => {
+    setChatModelBusy(true);
+    setChatModelMsg(null);
+    try {
+      const data = await setChatModel(chatModelId);
+      const label =
+        data.chat_models?.active_label ||
+        data.llm?.chat_model_label ||
+        chatModelId;
+      setChatModelMsg(`Активна: ${label}`);
+      onRefresh();
+    } catch (err) {
+      setChatModelMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChatModelBusy(false);
     }
   };
 
@@ -741,9 +768,32 @@ export function SidePanel({
                     : String(llmBackend)
               }
             />
+            <InfoLine
+              label="Профиль чата"
+              value={
+                status?.chat_models?.active_label ||
+                status?.llm?.chat_model_label ||
+                status?.chat_models?.active_id ||
+                "—"
+              }
+            />
             <InfoLine label="Чат" value={status?.model || "—"} />
             {llmBackend === "gguf" && status?.llm?.model_path ? (
               <InfoLine label="Файл" value={status.llm.model_path} />
+            ) : null}
+            {(status?.chat_models?.profiles || []).length > 0 ? (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mt: 0.75 }}
+              >
+                {(status?.chat_models?.profiles || [])
+                  .map(
+                    (p) =>
+                      `${p.present ? "✓" : "·"} ${p.label}${p.active ? " ←" : ""}`,
+                  )
+                  .join(" · ")}
+              </Typography>
             ) : null}
             {llmBackend !== "gguf" ? (
               <InfoLine label="Vision" value={status?.vision_model || status?.model || "—"} />
@@ -758,7 +808,7 @@ export function SidePanel({
                 color="text.secondary"
                 sx={{ display: "block", mt: 0.75 }}
               >
-                Доступно: {models.slice(0, 8).join(", ")}
+                Файлы: {models.slice(0, 8).join(", ")}
                 {models.length > 8 ? "…" : ""}
               </Typography>
             )}
@@ -818,6 +868,54 @@ export function SidePanel({
           Настройки
         </DialogTitle>
         <DialogContent>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
+            Модель чата
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
+            Pathfinder — личность. Qwen2.5 — запасной чат / инструкции. Скачай GGUF в{" "}
+            <code>data/models</code>, затем переключи здесь.
+          </Typography>
+          <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
+            <InputLabel id="chat-model-label">Профиль</InputLabel>
+            <Select
+              labelId="chat-model-label"
+              label="Профиль"
+              value={chatModelId}
+              onChange={(e) => setChatModelId(String(e.target.value))}
+            >
+              {(status?.chat_models?.profiles || [
+                { id: "pathfinder", label: "Pathfinder RP 12B RU", present: false },
+                { id: "qwen25", label: "Qwen2.5-7B-Instruct Q5_K_M", present: false },
+              ]).map((p) => (
+                <MenuItem key={p.id} value={p.id} disabled={p.present === false}>
+                  {p.present === false ? "· " : "✓ "}
+                  {p.label}
+                  {p.blurb ? ` — ${p.blurb}` : ""}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          {chatModelMsg && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+            >
+              {chatModelMsg}
+            </Typography>
+          )}
+          <Button
+            fullWidth
+            variant="contained"
+            disabled={busy || chatModelBusy}
+            onClick={() => void applyChatModel()}
+            sx={{ mb: 2.5 }}
+          >
+            {chatModelBusy ? "Гружу модель…" : "Применить модель чата"}
+          </Button>
+
+          <Divider sx={{ mb: 2 }} />
+
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
             Модель: CPU / GPU
           </Typography>

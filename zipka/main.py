@@ -11,6 +11,7 @@ from rich.panel import Panel
 from zipka.agent import Zipka
 from zipka.config import ensure_data_dirs, get_settings
 from zipka.evolve.hard import APPROVE_PHRASE
+from zipka.mind.goals import normalize_goals
 
 app = typer.Typer(
     name="zipka",
@@ -51,7 +52,7 @@ def status() -> None:
                     f"Pending patch: {s['pending_patch']}",
                     f"Focus: {s['mind'].get('focus')}",
                     f"Mood: {s['mind'].get('mood')}",
-                    f"Goals: {'; '.join(s['mind'].get('goals') or [])}",
+                    f"Goals: {'; '.join(normalize_goals(s['mind'].get('goals') or []))}",
                     (
                         f"Собеседник: {((s.get('user') or {}).get('name') or '—')}"
                         f" · настроение {((s.get('user') or {}).get('mood') or '—')}"
@@ -287,6 +288,58 @@ def reset_learning_cmd(
         raise typer.Exit(1)
     result = z.reset_learning(confirm=True)
     console.print(Panel(str(result), title="reset"))
+
+
+models_app = typer.Typer(help="Чатовые GGUF: Pathfinder + Qwen2.5")
+app.add_typer(models_app, name="models")
+
+
+@models_app.command("list")
+def models_list() -> None:
+    """Список чатовых профилей и наличие файлов."""
+    from zipka.tools.download_chat_models import main as dl_main
+
+    raise typer.Exit(dl_main(["--list"]))
+
+
+@models_app.command("download")
+def models_download(
+    model_id: str = typer.Option(
+        "all",
+        "--id",
+        help="pathfinder | qwen25 | all",
+    ),
+    force: bool = typer.Option(False, "--force", help="Перекачать"),
+) -> None:
+    """Скачать Pathfinder и/или Qwen2.5-7B в data/models."""
+    from zipka.tools.download_chat_models import main as dl_main
+
+    args = ["--id", model_id]
+    if force:
+        args.append("--force")
+    raise typer.Exit(dl_main(args))
+
+
+@models_app.command("use")
+def models_use(
+    model_id: str = typer.Argument(..., help="pathfinder | qwen25"),
+) -> None:
+    """Переключить активный чатовый профиль и перезагрузить LLM."""
+    z = _agent()
+    try:
+        result = z.set_chat_model(model_id)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    llm = result.get("llm") or {}
+    console.print(
+        Panel(
+            f"Профиль: {model_id}\n"
+            f"Файл: {llm.get('model') or '—'}\n"
+            f"Путь: {llm.get('model_path') or '—'}",
+            title="chat model",
+        )
+    )
 
 
 @app.command()

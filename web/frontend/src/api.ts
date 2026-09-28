@@ -23,6 +23,29 @@ export type LlmBackendInfo = {
   model_path?: string;
   host?: string;
   available?: boolean;
+  chat_model_id?: string;
+  chat_model_label?: string;
+};
+
+export type ChatModelProfile = {
+  id: string;
+  label: string;
+  blurb?: string;
+  filename?: string;
+  present?: boolean;
+  path?: string | null;
+  size_hint_gb?: number;
+  active?: boolean;
+};
+
+export type ChatModelsStatus = {
+  active_id?: string;
+  active_label?: string;
+  active_path?: string | null;
+  active_present?: boolean;
+  models_dir?: string;
+  profiles?: ChatModelProfile[];
+  download_hint?: string;
 };
 
 export type SpeakerGuardSummary = {
@@ -80,6 +103,7 @@ export type StatusResponse = {
   approve_phrase?: string;
   user?: UserProfileSummary;
   compute?: ComputeSettings;
+  chat_models?: ChatModelsStatus;
   proactive?: {
     today?: string;
     used?: number;
@@ -240,6 +264,27 @@ export async function setCompute(mode: string, gpu_layers?: number | null) {
   if (!res.ok) {
     const detail = data.detail;
     throw new Error(typeof detail === "string" ? detail : "Не удалось сменить compute");
+  }
+  return data;
+}
+
+export async function setChatModel(model_id: string) {
+  const res = await fetch("/api/settings/chat-model", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model_id }),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    chat_models?: ChatModelsStatus;
+    llm?: LlmBackendInfo;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "Не удалось сменить модель чата",
+    );
   }
   return data;
 }

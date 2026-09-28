@@ -84,10 +84,13 @@ class ProactiveEngine:
         self.memory.add_note("proactive", text, meta={"kind": kind})
 
     def _persona_bits(self) -> str:
+        from zipka.mind.goals import normalize_goals
+
         mind = self.mind.load()
-        goals = "; ".join(mind.get("goals") or [])
+        goals = "; ".join(normalize_goals(mind.get("goals") or []))
         return (
-            f"Ты Зипка. Говори коротко, по-русски, с характером.\n"
+            f"Ты Зипка. Говори коротко, по-русски, с характером. "
+            f"О себе — только женский род (рада, поняла, готова — не рад/понял/готов).\n"
             f"Цели: {goals}\n"
             f"Фокус: {mind.get('focus')}\n"
             f"Настроение: {mind.get('mood')}\n"
@@ -158,6 +161,7 @@ class ProactiveEngine:
                 + "Это первый контакт с пользователем за сегодня. "
                 + "Поприветствуй естественно, как в живом общении: 1–2 коротких "
                 + "предложения, без официоза и без списка пунктов. "
+                + "Только женский род о себе: «Рада знакомству», не «Рад». "
                 + "Не начинай каждое предложение с имени. Не прощайся."
             )
             try:
@@ -196,7 +200,9 @@ class ProactiveEngine:
         if self.session_turns == 0 or self.session_turns % GOAL_NUDGE_EVERY_TURNS != 0:
             return None
         mind = self.mind.load()
-        goals = mind.get("goals") or []
+        from zipka.mind.goals import normalize_goals
+
+        goals = normalize_goals(mind.get("goals") or [])
         if not goals:
             return None
         goal = random.choice(goals)
@@ -336,9 +342,12 @@ class ProactiveEngine:
             "Без приветствия «здравствуйте», без воды."
         )
         if not self.llm.is_available():
+            from zipka.mind.goals import normalize_goals
+
             mind = self.mind.load()
+            goals = normalize_goals(mind.get("goals") or ["жизнь"])
             text = (
-                f"Эй. По цели «{(mind.get('goals') or ['жизнь'])[0]}» — "
+                f"Эй. По цели «{goals[0]}» — "
                 "ты ещё со мной или уже в другом окне?"
             )
         else:

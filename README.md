@@ -22,15 +22,19 @@ pip install -r requirements.txt
 pip install llama-cpp-python --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 copy .env.example .env
 
-# положи *.gguf в data/models (например qwen2.5-7b-instruct-q4_k_m.gguf)
-# ZIPKA_LLM_BACKEND=auto подхватит его сама
+# два чатовых профиля (Pathfinder + Qwen2.5) — скачать в data/models:
+python -m zipka.tools.download_chat_models --id all
+# или по одному: --id pathfinder / --id qwen25
+
+# ZIPKA_CHAT_MODEL=pathfinder в .env; переключение в UI или:
+# python -m zipka.main models use qwen25
 
 python -m zipka.main status
 python -m zipka.main web
 ```
 
-Каталог моделей: https://huggingface.co/models?library=gguf  
-Опционально в `.env`: `ZIPKA_GGUF_MODEL=имя_файла.gguf`, `ZIPKA_GGUF_CTX=8192`, `ZIPKA_GGUF_GPU_LAYERS=0`.
+Подробности: [`data/models/README.md`](data/models/README.md).  
+Опционально в `.env`: `ZIPKA_CHAT_MODEL=pathfinder|qwen25`, `ZIPKA_GGUF_CTX=8192`, compute hybrid в настройках UI.
 
 ### Вариант B — системная Ollama
 

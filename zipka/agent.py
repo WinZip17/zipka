@@ -14,6 +14,7 @@ from zipka.config import Settings, ensure_data_dirs, get_settings
 from zipka.evolve.hard import APPROVE_PHRASE, HardEvolve
 from zipka.evolve.soft import SoftEvolve
 from zipka.llm.base import LlmError
+from zipka.llm.chat_models import chat_models_status
 from zipka.llm.factory import create_llm_client, describe_backend
 from zipka.llm.ollama_client import OllamaError
 from zipka.memory.store import MemoryStore
@@ -172,19 +173,10 @@ class Zipka:
             },
             "user": self.user.summary_for_ui(),
             "compute": compute_status(self.settings),
+            "chat_models": chat_models_status(self.settings),
         }
 
-    def set_compute(
-        self,
-        mode: str,
-        *,
-        gpu_layers: int | None = None,
-    ) -> dict[str, Any]:
-        """Переключить CPU / GPU / hybrid и перезагрузить LLM."""
-        patch: dict[str, Any] = {"compute_mode": mode}
-        if gpu_layers is not None:
-            patch["gpu_layers"] = gpu_layers
-        save_runtime(patch, self.settings)
+    def _reload_llm(self) -> dict[str, Any]:
         if hasattr(self.llm, "unload"):
             try:
                 self.llm.unload()
@@ -203,10 +195,45 @@ class Zipka:
             if hasattr(holder, "llm"):
                 holder.llm = self.llm
         return {
+            "llm": describe_backend(self.llm),
+            "chat_models": chat_models_status(self.settings),
+        }
+
+    def set_compute(
+        self,
+        mode: str,
+        *,
+        gpu_layers: int | None = None,
+    ) -> dict[str, Any]:
+        """Переключить CPU / GPU / hybrid и перезагрузить LLM."""
+        patch: dict[str, Any] = {"compute_mode": mode}
+        if gpu_layers is not None:
+            patch["gpu_layers"] = gpu_layers
+        save_runtime(patch, self.settings)
+        reloaded = self._reload_llm()
+        return {
             "ok": True,
             "compute": compute_status(self.settings),
-            "llm": describe_backend(self.llm),
+            **reloaded,
         }
+
+    def set_chat_model(self, model_id: str) -> dict[str, Any]:
+        """Переключить чатовый GGUF-профиль (pathfinder | qwen25)."""
+        from zipka.llm.chat_models import CHAT_PROFILES, find_profile_file
+
+        mid = (model_id or "").strip().lower()
+        if mid not in CHAT_PROFILES:
+            raise ValueError("chat_model_id: pathfinder | qwen25")
+        profile = CHAT_PROFILES[mid]
+        models_dir = self.settings.data_dir / "models"
+        if find_profile_file(models_dir, profile) is None:
+            raise ValueError(
+                f"Файл «{profile['filename']}» не найден в {models_dir}. "
+                f"Скачай: python -m zipka.tools.download_chat_models --id {mid}"
+            )
+        save_runtime({"chat_model_id": mid}, self.settings)
+        reloaded = self._reload_llm()
+        return {"ok": True, **reloaded}
 
     def build_messages(self, user_text: str) -> list[dict[str, str]]:
         note_limit = 4 if getattr(self.llm, "backend", "") == "gguf" else 8

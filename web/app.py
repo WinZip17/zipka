@@ -11,6 +11,7 @@ from zipka.agent import Zipka
 from zipka.evolve.hard import APPROVE_PHRASE
 from zipka.reset import CONFIRM_PHRASE
 from zipka.runtime_settings import compute_status
+from zipka.llm.chat_models import chat_models_status
 from zipka.system_limits import format_bytes, max_book_bytes
 
 ROOT = Path(__file__).resolve().parent
@@ -49,6 +50,10 @@ class ComputeIn(BaseModel):
     gpu_layers: int | None = Field(default=None, ge=1, le=128)
 
 
+class ChatModelIn(BaseModel):
+    model_id: str = Field(description="pathfinder | qwen25")
+
+
 def _spa_index() -> Path:
     index = DIST / "index.html"
     if not index.exists():
@@ -77,6 +82,21 @@ def api_set_compute(body: ComputeIn) -> dict:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, f"Не удалось применить compute: {exc}") from exc
+
+
+@app.get("/api/settings/chat-model")
+def api_get_chat_model() -> dict:
+    return chat_models_status()
+
+
+@app.post("/api/settings/chat-model")
+def api_set_chat_model(body: ChatModelIn) -> dict:
+    try:
+        return agent.set_chat_model(body.model_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось сменить модель чата: {exc}") from exc
 
 
 @app.post("/api/chat")
