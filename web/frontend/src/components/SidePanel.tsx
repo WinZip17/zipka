@@ -620,8 +620,28 @@ export function SidePanel({
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
               Наблюдений: {status?.user?.evidence_count ?? 0}
               {status?.user?.facts_count ? ` · фактов: ${status.user.facts_count}` : ""}
+              {" · стиль: "}
+              {status?.user?.style_ready
+                ? `готов (${status?.user?.style_samples ?? 0})`
+                : `учу (${status?.user?.style_samples ?? 0}/${8})`}
               {" · "}профиль в data/memory/user_profile.json
             </Typography>
+            {status?.user?.speaker?.alert ? (
+              <Typography
+                variant="caption"
+                sx={{ display: "block", mt: 0.75, color: "warning.main" }}
+              >
+                Смена собеседника? уверенность{" "}
+                {Math.round(Number(status.user.speaker.confidence || 0) * 100)}%
+                {status.user.speaker.signals?.length
+                  ? ` — ${status.user.speaker.signals.slice(0, 3).join("; ")}`
+                  : ""}
+              </Typography>
+            ) : status?.user?.style_ready ? (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                Охрана стиля: активна (срабатывает только при высокой уверенности)
+              </Typography>
+            ) : null}
           </InfoBlock>
 
           <InfoBlock title="Лимиты">

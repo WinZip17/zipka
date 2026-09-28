@@ -25,6 +25,15 @@ export type LlmBackendInfo = {
   available?: boolean;
 };
 
+export type SpeakerGuardSummary = {
+  same_person?: boolean | null;
+  confidence?: number | null;
+  alert?: boolean;
+  signals?: string[];
+  reason?: string;
+  alerts_count?: number;
+};
+
 export type UserProfileSummary = {
   name?: string;
   how_to_address?: string;
@@ -41,6 +50,9 @@ export type UserProfileSummary = {
   facts_count?: number;
   evidence_count?: number;
   updated_at?: string;
+  style_ready?: boolean;
+  style_samples?: number;
+  speaker?: SpeakerGuardSummary;
 };
 
 export type StatusResponse = {

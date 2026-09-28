@@ -297,10 +297,16 @@ class Zipka:
                 "либо положи *.gguf в data/models (см. README)."
             )
 
+        try:
+            self.user.check_speaker(text)
+        except Exception:
+            pass
+
         messages = self.build_messages(text)
         try:
             reply = self.llm.chat(messages)
         except LlmError as exc:
+            self.user._turn_alert = None
             return str(exc)
         self._remember_turn(text, reply)
         self.mind.bump_turn()
@@ -310,6 +316,8 @@ class Zipka:
             self.user.observe_dialogue(text, reply)
         except Exception:
             pass
+        finally:
+            self.user._turn_alert = None
 
         if auto_soft and self._wants_soft_evolve(text):
             try:
