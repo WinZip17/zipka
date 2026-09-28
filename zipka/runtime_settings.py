@@ -15,6 +15,8 @@ DEFAULT_RUNTIME: dict[str, Any] = {
     "gpu_layers": 16,
     "chat_gguf": "Pathfinder-RP-12B-RU.Q4_K_M.gguf",
     "code_gguf": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
+    "vision_gguf": "",
+    "vision_mmproj": "",
 }
 
 
@@ -77,6 +79,10 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current["chat_gguf"] = _normalize_name(patch["chat_gguf"])
     if "code_gguf" in patch and patch["code_gguf"] is not None:
         current["code_gguf"] = _normalize_name(patch["code_gguf"])
+    if "vision_gguf" in patch and patch["vision_gguf"] is not None:
+        current["vision_gguf"] = _normalize_name(patch["vision_gguf"])
+    if "vision_mmproj" in patch and patch["vision_mmproj"] is not None:
+        current["vision_mmproj"] = _normalize_name(patch["vision_mmproj"])
 
     # legacy API: chat_model_id как id или filename
     if "chat_model_id" in patch and patch["chat_model_id"] is not None:
@@ -84,6 +90,8 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current["chat_gguf"] = LEGACY_IDS.get(raw.lower(), _normalize_name(raw))
 
     current["chat_model_id"] = current["chat_gguf"]
+    current["vision_gguf"] = _normalize_name(current.get("vision_gguf")) or ""
+    current["vision_mmproj"] = _normalize_name(current.get("vision_mmproj")) or ""
     path = _runtime_path(settings)
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return current

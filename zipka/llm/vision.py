@@ -262,13 +262,14 @@ class VisionGgufClient:
 
         handler = _make_handler(pair["handler"], pair["mmproj_path"])
         n_gpu = int(resolve_gpu_layers(self.settings))
-        # vision обычно небольшой — можно больше слоёв на GPU
-        if n_gpu == 0:
-            n_gpu = 0
+        # Moondream train ctx = 2048; больше — overflow / хуже качество
+        want_ctx = max(2048, int(self.settings.zipka_gguf_ctx))
+        if pair["handler"] == "moondream2":
+            want_ctx = 2048
         kwargs: dict[str, Any] = {
             "model_path": str(pair["model_path"]),
             "chat_handler": handler,
-            "n_ctx": min(4096, max(2048, int(self.settings.zipka_gguf_ctx))),
+            "n_ctx": want_ctx,
             "n_gpu_layers": n_gpu if n_gpu != 0 else 0,
             "logits_all": True,
             "verbose": False,
