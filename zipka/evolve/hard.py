@@ -49,6 +49,21 @@ EDITABLE_SUFFIXES = {
     ".cs",
 }
 
+# Правила для правок React UI (MUI) — в system prompt hard-evolve
+FRONTEND_EDIT_RULES = """
+Правила UI (web/frontend, React + MUI v9 + Emotion):
+1. Стили ТОЛЬКО через prop sx={{ ... }} или theme. Никакого нативного CSS в JSX.
+2. Запрещено: style="color:red", style={'color: red'}, <style>...</style>,
+   class="...", inline CSS-строки, отдельные .css ради одной кнопки.
+3. В sx используй camelCase: backgroundColor, borderRadius, fontSize — не
+   background-color / border-radius.
+4. Не подменяй MUI-компоненты (Box, Stack, Button, InputBase, Typography…) на
+   голые div/button/input, если задача этого не требует.
+5. Сохраняй существующие импорты @mui/material и @mui/icons-material.
+6. Не пиши CSS-селекторы (.class {}, #id {}) внутрь TSX/JSX.
+7. Меняй минимум строк; копируй стиль соседнего кода один в один.
+""".strip()
+
 
 class HardEvolve:
     """Правки кода только после явного approve (Zipka и/или изученный проект)."""
@@ -233,19 +248,45 @@ class HardEvolve:
                 "Меняй только zipka/ и web/. UI чата — в web/frontend/src/."
             )
         )
+        touches_frontend = any(
+            f.replace("\\", "/").startswith("web/frontend/")
+            or f.endswith((".tsx", ".jsx"))
+            for f in focus_files
+        ) or any(
+            k in request.lower()
+            for k in (
+                "интерфейс",
+                "ui",
+                "jsx",
+                "tsx",
+                "mui",
+                "кнопк",
+                "чат",
+                "composer",
+                "textarea",
+                "инпут",
+                "поле ввода",
+                "frontend",
+            )
+        )
+        system = (
+            "Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON:\n"
+            '{"files": [{"path": "relative/path.ext", '
+            '"content": "полный новый текст файла"}]}\n'
+            f"{scope_hint} Не трогай .env, secrets, node_modules, dist. "
+            "Меняй минимум файлов. "
+        )
+        if touches_frontend or self_edit:
+            system += "\n" + FRONTEND_EDIT_RULES
+        else:
+            system += (
+                "Если правишь React — сохрани существующие импорты и поведение, "
+                "кроме запрошенного."
+            )
+
         raw = self.llm.chat(
             [
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON:\n"
-                        '{"files": [{"path": "relative/path.ext", '
-                        '"content": "полный новый текст файла"}]}\n'
-                        f"{scope_hint} Не трогай .env, secrets, node_modules, dist. "
-                        "Меняй минимум файлов. Если правишь React — сохрани существующие "
-                        "импорты и поведение, кроме запрошенного."
-                    ),
-                },
+                {"role": "system", "content": system},
                 {
                     "role": "user",
                     "content": (
@@ -280,6 +321,13 @@ class HardEvolve:
                 store_rel = abs_path.relative_to(base).as_posix()
             except ValueError:
                 continue
+            bad = self._frontend_style_problems(store_rel, str(content))
+            if bad:
+                raise RuntimeError(
+                    "Патч отклонён: в JSX нельзя так стилизовать (нативный CSS). "
+                    + bad
+                    + " Переформулируй запрос или попроси снова: стили только через sx={{…}}."
+                )
             files.append({"path": store_rel, "content": content})
         if not files:
             raise RuntimeError(
@@ -520,12 +568,51 @@ class HardEvolve:
         picked = [rel for _, rel in scored[:limit]]
         if any(
             k in lowered
-            for k in ("textarea", "текстареа", "поле ввода", "инпут", "input", "сообщен")
+            for k in ("textarea", "текстареа", "поле ввода", "инпут", "input", "сообщен", "интерфейс", "ui", "кнопк")
         ):
             cand = "web/frontend/src/components/Composer.tsx"
             if cand in tree and cand not in picked:
                 picked.insert(0, cand)
+            theme = "web/frontend/src/theme.ts"
+            if theme in tree and theme not in picked:
+                picked.append(theme)
         return picked[:limit]
+
+    def _frontend_style_problems(self, rel: str, content: str) -> str | None:
+        """Поймать типичный «нативный CSS» в JSX/TSX патчах."""
+        path = rel.replace("\\", "/").lower()
+        if not path.endswith((".tsx", ".jsx")):
+            return None
+        if not (
+            "web/frontend/" in path
+            or "/frontend/" in path
+            or path.startswith("frontend/")
+        ):
+            # внешние проекты не жёстко валидируем тем же MUI-контрактом
+            if "mui" not in content.lower() and "sx={{" not in content:
+                return None
+
+        problems: list[str] = []
+        # HTML-style attribute
+        if re.search(r"\bstyle\s*=\s*['\"][^'\"]*[;:][^'\"]*['\"]", content):
+            problems.append("найден style=\"…\" со CSS-строкой")
+        if re.search(r"\bstyle\s*=\s*\{\s*['`][^'`]+:[^'`]+['`]\s*\}", content):
+            problems.append("найден style={'css: ...'} — нужна sx={{ camelCase }}")
+        if re.search(r"<\s*style[\s>]", content, re.I):
+            problems.append("найден тег <style>")
+        if re.search(r"\bclass\s*=\s*['\"]", content):
+            problems.append("найден class=… (в React нужен className или sx)")
+        # CSS rule blocks dumped into TSX
+        if re.search(r"\{[^{}]*[a-z-]+\s*:\s*[^;]+;[^{}]*\}", content) and re.search(
+            r"\.[a-zA-Z_][\w-]*\s*\{", content
+        ):
+            problems.append("похоже на CSS-селекторы (.class { … }) внутри TSX")
+        # kebab-case in sx object keys without quotes is SyntaxError; with quotes is smell
+        if re.search(r"sx=\{\{[^}]*['\"][a-z]+-[a-z]+['\"]\s*:", content):
+            problems.append("в sx ключи с дефисом — используй camelCase (backgroundColor)")
+        if problems:
+            return "; ".join(problems)
+        return None
 
     def _maybe_rebuild_frontend(self) -> str | None:
         """Пересобрать React UI после правок исходников."""
