@@ -1,11 +1,15 @@
-# Локальные GGUF для чата Зипки
+# Локальные GGUF для Зипки
 
-Два профиля под RTX 4060 Laptop 8GB:
+Роли (можно выбрать любой `*.gguf` из этой папки на каждую роль, в т.ч. одну и ту же):
 
-| Профиль | Файл | Зачем |
-|---------|------|--------|
-| `pathfinder` | `Pathfinder-RP-12B-RU.Q4_K_M.gguf` (~7.5 GB) | личность / живой русский |
-| `qwen25` | `Qwen2.5-7B-Instruct-Q5_K_M.gguf` (~5.4 GB) | запасной чат / инструкции |
+| Роль | По умолчанию | Зачем |
+|------|----------------|--------|
+| **Чат** | `Pathfinder-RP-12B-RU.Q4_K_M.gguf` (~7.5 GB) | личность / живой русский |
+| **Кодинг** | `Qwen2.5-7B-Instruct-Q5_K_M.gguf` (~5.4 GB) | патчи / инструкции / JSON |
+
+Другие файлы в папке (например `Qwen3-8B-Q4_K_M.gguf`) тоже доступны в UI.
+
+Legacy id для скачивания / CLI: `pathfinder`, `qwen25`.
 
 ## Скачать
 
@@ -28,12 +32,13 @@ python -m zipka.main models use pathfinder
 - Pathfinder: https://huggingface.co/roleplaiapp/Pathfinder-RP-12B-RU-Q4_K_M-GGUF
 - Qwen2.5: https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF (`Qwen2.5-7B-Instruct-Q5_K_M.gguf`)
 
-Положи файлы сюда (`data/models/`), имена как в таблице (или с теми же токенами в имени).
+Положи файлы сюда (`data/models/`).
 
 ## Переключение
 
-- UI: **Настройки → Модель чата**
-- CLI: `python -m zipka.main models use qwen25`
-- `.env`: `ZIPKA_CHAT_MODEL=pathfinder` (стартовое значение; UI/runtime перекрывает)
+- UI: **Настройки → Модели GGUF** (чат + кодинг отдельно)
+- CLI: `python -m zipka.main models use pathfinder` (или имя файла `.gguf`) — меняет роль **чата**
+- `.env`: `ZIPKA_CHAT_MODEL=pathfinder` (стартовое; `data/settings/runtime.json` перекрывает)
+- Runtime: `chat_gguf` / `code_gguf` в `data/settings/runtime.json`
 
-Compute: для Pathfinder на 8GB удобнее **hybrid**.
+Compute (CPU / GPU / hybrid): настройки UI. Для Pathfinder на 8GB VRAM удобнее **hybrid** или одна модель на обе роли.

@@ -6,11 +6,13 @@
 
 1. Мягкая самоэволюция (характер, навыки, предпочтения)
 2. Правки своего кода только после фразы `разрешаю правку кода`
-3. Характер Зипки + чтение книг и исходников (txt/md/fb2/djvu/py/js/ts/…, zip/rar, папки)
+3. Характер Зипки + чтение книг, исходников и **чужих проектов** (txt/md/fb2/djvu/py/js/ts/…, zip/rar, папки)
 4. Глаза (webcam) и уши (mic + faster-whisper)
 5. Цели и рефлексия (псевдоразум)
-6. Самообучение по сети (GET, allowlist)
-7. CLI + web UI (React + MUI)
+6. Самообучение по сети (GET, allowlist) и чтение URL из чата (`прочитай https://…`)
+7. Профиль собеседника (имя, настроение, «свои», speaker-guard)
+8. CLI + web UI (React + MUI)
+9. Две роли GGUF: **чат** и **кодинг** (можно одна модель на обе)
 
 ## Быстрый старт
 
@@ -22,19 +24,28 @@ pip install -r requirements.txt
 pip install llama-cpp-python --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 copy .env.example .env
 
-# два чатовых профиля (Pathfinder + Qwen2.5) — скачать в data/models:
+# рекомендуемые GGUF в data/models:
 python -m zipka.tools.download_chat_models --id all
-# или по одному: --id pathfinder / --id qwen25
-
-# ZIPKA_CHAT_MODEL=pathfinder в .env; переключение в UI или:
-# python -m zipka.main models use qwen25
+# или: python -m zipka.main models download --id all
 
 python -m zipka.main status
 python -m zipka.main web
 ```
 
-Подробности: [`data/models/README.md`](data/models/README.md).  
-Опционально в `.env`: `ZIPKA_CHAT_MODEL=pathfinder|qwen25`, `ZIPKA_GGUF_CTX=8192`, compute hybrid в настройках UI.
+Подробности: [`data/models/README.md`](data/models/README.md).
+
+**По умолчанию (runtime):**
+
+| Роль | Файл |
+|------|------|
+| Чат | `Pathfinder-RP-12B-RU.Q4_K_M.gguf` |
+| Кодинг | `Qwen2.5-7B-Instruct-Q5_K_M.gguf` |
+
+Любой `*.gguf` из `data/models` можно выбрать **для чата и для кодинга** (в т.ч. одну и ту же) в UI: **Настройки → Модели GGUF**.  
+Compute: CPU / GPU / hybrid — там же. Состояние: `data/settings/runtime.json`.
+
+Legacy в `.env`: `ZIPKA_CHAT_MODEL=pathfinder|qwen25` (стартовое имя чата; UI/runtime перекрывает).  
+Опционально: `ZIPKA_GGUF_CTX=8192`.
 
 ### Вариант B — системная Ollama
 
@@ -65,6 +76,8 @@ Web: http://127.0.0.1:8765
 
 **Приоритет (`ZIPKA_LLM_BACKEND=auto`):** если в `data/models` есть `*.gguf` → локальный llama.cpp; иначе Ollama. Глаза/vision пока только через Ollama.
 
+При разных GGUF на чат и кодинг в VRAM держится одна роль: перед кодингом выгружается чат и наоборот (одна модель на обе роли — без выгрузки).
+
 ## Запуск ярлыком
 
 1. Один раз создай ярлык на рабочий стол:
@@ -86,6 +99,7 @@ Web: http://127.0.0.1:8765
 1. **В чате по пути** (CLI или web):
    ```
    прочитай C:\Users\WinZip\Desktop\книга.fb2
+   прочитай https://habr.com/ru/articles/...
    изучи D:\Project2\zipka\zipka\agent.py комментарий: разбери soft-evolve
    изучи папку D:\Project2\zipka\zipka
    изучи папку D:\Books режим: books
@@ -101,8 +115,18 @@ Web: http://127.0.0.1:8765
    python -m zipka.main read PROJECT_DIR --edits -c "добавь логирование"
    ```
 
-Для кода Зипка делает разбор: назначение, API, зависимости, паттерны (не копирует длинные куски).  
-Папка: до 24 файлов по умолчанию (книги и/или код; без `node_modules` / `.venv` / `.git`).  
+Для кода Зипка делает разбор: назначение, API, зависимости, паттерны (не копирует длинные куски).
+
+**Изучение чужого проекта (папка)** — по AI-приоритетам:
+
+1. AI-контекст: `AGENTS.md`, `PROJECT_MAP.md`, `.cursorrules`, …
+2. Манифесты: `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, …
+3. Документация: корневой `README`, `docs/`
+4. Папки агентов: `.cursor/rules`, `.claude`, `agents/`, …
+
+Если такой контекст есть — читается он (до лимита файлов). Если нет — тогда прочие исходники.  
+Лимит по умолчанию: до 24 файлов; без `node_modules` / `.venv` / `.git`.
+
 После изучения проекта можно сказать «предложи правки» — патч только с `разрешаю правку кода`.  
 DJVU: читается через встроенный пакет **`djvu-rs`** (не нужен системный DjVuLibre).  
 Сканы без текстового слоя (без OCR) прочитать нельзя — нужен файл с уже распознанным текстом.  
@@ -115,6 +139,9 @@ DJVU: читается через встроенный пакет **`djvu-rs`** 
 | `python -m zipka.main read PATH` | Книга/код/папка/архив |
 | `python -m zipka.main read PATH --list` | Список файлов в архиве |
 | `python -m zipka.main read PATH -m file.py` | Файл внутри архива |
+| `python -m zipka.main models list` | Профили / GGUF для скачивания |
+| `python -m zipka.main models download --id all` | Скачать Pathfinder + Qwen2.5 |
+| `python -m zipka.main models use pathfinder` | Сменить модель чата (legacy id или имя `.gguf`) |
 | `python -m zipka.main eyes on\|off\|snap\|screen\|window` | Камера / экран / окно |
 | `python -m zipka.main ears on\|off\|listen` | Микрофон |
 | `python -m zipka.main reset-learning` | Сброс всего обучения (с подтверждением) |
@@ -142,11 +169,13 @@ DJVU: читается через встроенный пакет **`djvu-rs`** 
 | История чата | `data/memory/chat.jsonl` |
 | Навыки | `data/memory/skills.json` |
 | Предпочтения | `data/memory/preferences.json` |
+| Профиль собеседника | `data/memory/user_profile.json` (gitignore) |
 | Лог эволюции | `data/memory/evolve_log.jsonl` |
 | Характер (живой, локально) | `data/persona/persona.yaml` (gitignore) |
 | Seed характера | `data/persona/persona.example.yaml` |
 | Цели / настроение / фокус | `data/mind/state.json` (gitignore) |
 | Проактивность (пинги, приветствия) | `data/mind/proactive.json` (gitignore) |
+| Compute + выбранные GGUF | `data/settings/runtime.json` (gitignore) |
 | Выжимки книг | `data/books/notes/*_digest.md` |
 | Распакованные из zip/rar | `data/books/extracted/` |
 | Локальные GGUF-модели | `data/models/*.gguf` (gitignore) |
@@ -161,5 +190,6 @@ DJVU: читается через встроенный пакет **`djvu-rs`** 
 - Сеть: только GET по allowlist
 - Камера и микрофон выключены по умолчанию
 - Книги: в память идут выжимки, не полный текст в git
+- Сюжеты/фикшн (в т.ч. «взлом» в книге) не путаются с реальными вредоносными инструкциями
 
-См. актуальную карту: [PROJECT_MAP.md](PROJECT_MAP.md)
+См. актуальную карту: [PROJECT_MAP.md](PROJECT_MAP.md) *(часть разделов карты может отставать — ориентир по дереву модулей)*.
