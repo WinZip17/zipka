@@ -11,13 +11,19 @@ from zipka.books.reader import (
 )
 from zipka.character.persona import Persona
 from zipka.config import Settings, ensure_data_dirs, get_settings
-from zipka.evolve.hard import HardEvolve
+from zipka.evolve.hard import APPROVE_PHRASE, HardEvolve
 from zipka.evolve.soft import SoftEvolve
 from zipka.llm.ollama_client import OllamaClient, OllamaError
 from zipka.memory.store import MemoryStore
 from zipka.mind.goals import PseudoMind
 from zipka.mind.proactive import ProactiveEngine
 from zipka.net.learner import NetLearner
+from zipka.reset import (
+    CONFIRM_PHRASE,
+    is_reset_confirm,
+    is_reset_request,
+    reset_learning_data,
+)
 from zipka.safety.policy import SafetyPolicy
 from zipka.sensors.ears import Ears
 from zipka.sensors.eyes import Eyes
@@ -38,7 +44,8 @@ _DIR_PATH_RE = re.compile(
 _READ_INTENT = re.compile(
     r"(прочитай|прочти|прочесть|прочитать|читай|открой\s+книг|"
     r"прочитай\s+книг|read\s+(?:the\s+)?book|read\s+file|"
-    r"изучи|разбери|проанализируй|изучить|study|analyze|"
+    r"изучи(?:\s+папк\w*)?|разбери|проанализируй|изучить|study|analyze|"
+    r"обучись\s+на|обуч\w*\s+по\s+папк|"
     r"что\s+в\s+архиве|список\s+(?:файлов\s+)?(?:в\s+)?архиве|"
     r"list\s+archive)",
     re.IGNORECASE,
@@ -54,6 +61,18 @@ _MEMBER_RE = re.compile(
 _COMMENT_RE = re.compile(
     r"(?:комментарий|учти|с\s+комментарием|фокус|note|comment)\s*[:\-–—]\s*(?P<c>.+)$",
     re.IGNORECASE | re.DOTALL,
+)
+_MODE_RE = re.compile(
+    r"(?:mode|режим|только)\s*[:\s]+(?P<m>books?|code|код|книг\w*|auto|вс[её])",
+    re.IGNORECASE,
+)
+_EDITS_RE = re.compile(
+    r"(предложи\s+правк|с\s+правкам|и\s+правк|propose\s+edits|--edits)",
+    re.IGNORECASE,
+)
+_MAX_FILES_RE = re.compile(
+    r"(?:макс(?:имум)?|max(?:[_-]?files)?|файлов)\s*[=:]?\s*(?P<n>\d+)",
+    re.IGNORECASE,
 )
 
 
@@ -79,8 +98,37 @@ class Zipka:
         self.safety = SafetyPolicy()
         self.uploads_dir = self.settings.data_dir / "books" / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self._reset_pending = False
+
+    def reload_runtime(self) -> None:
+        """Пересоздать модули после очистки data/."""
+        ensure_data_dirs(self.settings)
+        self.memory = MemoryStore(self.settings)
+        self.persona = Persona(self.settings)
+        self.soft = SoftEvolve(self.persona, self.memory, self.llm)
+        self.hard = HardEvolve(self.llm, self.memory, self.settings)
+        self.books = BookReader(self.llm, self.memory, self.settings)
+        self.eyes = Eyes(self.settings)
+        self.ears = Ears(self.settings)
+        self.mind = PseudoMind(
+            self.persona, self.memory, self.llm, self.soft, self.settings
+        )
+        self.proactive = ProactiveEngine(
+            self.llm, self.memory, self.mind, self.settings
+        )
+        self.net = NetLearner(self.llm, self.memory, self.settings)
+        self.uploads_dir = self.settings.data_dir / "books" / "uploads"
+        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self._reset_pending = False
+
+    def reset_learning(self, *, confirm: bool = False) -> dict[str, Any]:
+        result = reset_learning_data(self.settings, confirm=confirm)
+        self.reload_runtime()
+        return result
 
     def status(self) -> dict[str, Any]:
+        from zipka.system_limits import available_ram_bytes, format_bytes, max_book_bytes
+
         ollama_ok = self.llm.is_available()
         models = []
         if ollama_ok:
@@ -88,16 +136,26 @@ class Zipka:
                 models = self.llm.list_models()
             except OllamaError:
                 models = []
+        book_limit = max_book_bytes()
+        avail = available_ram_bytes()
         return {
             "name": "Зипка",
             "ollama": ollama_ok,
             "models": models,
             "model": self.settings.ollama_model,
+            "vision_model": self.settings.vision_model,
             "eyes": self.eyes.enabled,
             "ears": self.ears.enabled,
             "pending_patch": self.hard.has_pending(),
+            "approve_phrase": APPROVE_PHRASE,
             "mind": self.mind.load(),
             "proactive": self.proactive.rare_ping_status(),
+            "limits": {
+                "max_book_bytes": book_limit,
+                "max_book_human": format_bytes(book_limit),
+                "ram_available_bytes": avail,
+                "ram_available_human": format_bytes(avail) if avail else None,
+            },
         }
 
     def build_messages(self, user_text: str) -> list[dict[str, str]]:
@@ -128,6 +186,39 @@ class Zipka:
             self._remember_turn(text, reply)
             return reply
 
+        if self._reset_pending:
+            if is_reset_confirm(text):
+                result = self.reset_learning(confirm=True)
+                removed_n = len(result.get("removed") or [])
+                reply = (
+                    f"Обучение сброшено ({removed_n} путей очищено). "
+                    "Я снова с чистого листа."
+                )
+                # after reset chat log is empty — write first turn fresh
+                self._remember_turn(text, reply)
+                return reply
+            if is_reset_request(text):
+                reply = (
+                    f"Сброс всё ещё ждёт подтверждения. "
+                    f"Напиши точно: «{CONFIRM_PHRASE}» "
+                    "или что угодно другое, чтобы отменить."
+                )
+                return reply
+            self._reset_pending = False
+            reply = "Сброс отменён."
+            self._remember_turn(text, reply)
+            return reply
+
+        if is_reset_request(text):
+            self._reset_pending = True
+            reply = (
+                "Это сотрёт чат, заметки, цели, книги, снимки и патчи в `data/`. "
+                f"Если уверена — напиши точно: «{CONFIRM_PHRASE}». "
+                "Любой другой ответ отменит сброс."
+            )
+            self._remember_turn(text, reply)
+            return reply
+
         book_reply = self.try_read_from_message(text)
         if book_reply is not None:
             self._remember_turn(text, book_reply)
@@ -148,7 +239,22 @@ class Zipka:
             return self.hard.format_pending()
 
         if self.hard.wants_code_change(text):
-            pending = self.hard.propose(text)
+            project = self.hard.last_project()
+            # strip edit intent from being double-handled as read
+            ctx = None
+            notes = self.memory.recent_notes(limit=5)
+            if notes:
+                ctx = "\n".join(n.get("text", "") for n in notes)
+            try:
+                pending = self.hard.propose(
+                    text,
+                    project_root=project,
+                    context=ctx,
+                )
+            except Exception as exc:
+                reply = f"Не смогла подготовить патч: {exc}"
+                self._remember_turn(text, reply)
+                return reply
             reply = self.hard.format_pending(pending)
             self._remember_turn(text, reply)
             return reply
@@ -213,6 +319,18 @@ class Zipka:
         member_match = _MEMBER_RE.search(text)
         member = member_match.group("name") if member_match else None
         comment = self._extract_comment(text)
+        # Don't let mode/edits trails pollute comment if comment regex ate them —
+        # strip known tails from comment
+        if comment:
+            comment = re.split(
+                r"\b(?:режим|mode|предложи\s+правк|макс|файлов)\b",
+                comment,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0].strip() or None
+        mode = self._extract_mode(text)
+        max_files = self._extract_max_files(text)
+        want_edits = bool(_EDITS_RE.search(text))
 
         try:
             if (
@@ -224,9 +342,23 @@ class Zipka:
                 listing = "\n".join(f"- {b}" for b in books) or "(пусто)"
                 return f"В архиве `{path.name}`:\n{listing}"
 
-            result = self.books.read(path, member=member, comment=comment)
+            result = self.books.read(
+                path,
+                member=member,
+                comment=comment,
+                mode=mode,
+                max_files=max_files or 24,
+            )
             kind = result.get("kind") or "book"
-            verb = "Изучила" if kind.startswith("code") else "Прочитала"
+            if path.is_dir() and result.get("is_project"):
+                self.hard.remember_project(path)
+
+            if kind.startswith("folder"):
+                verb = "Изучила папку"
+            elif kind.startswith("code"):
+                verb = "Изучила"
+            else:
+                verb = "Прочитала"
             inner = (
                 f" (файл: {result['archive_member']})"
                 if result.get("archive_member")
@@ -234,9 +366,15 @@ class Zipka:
             )
             files_line = ""
             if result.get("files"):
-                files_line = f"Файлов: {len(result['files'])}.\n"
+                files_line = (
+                    f"Файлов: {len(result['files'])}"
+                    f" (книги={result.get('book_count', 0)}, "
+                    f"код={result.get('code_count', 0)}).\n"
+                )
             comment_line = f"С учётом комментария: {comment}\n" if comment else ""
-            digest_preview = (result.get("digest") or "")[:1500]
+            digest_preview = (result.get("overview") or result.get("digest") or "")[
+                :1800
+            ]
             reply = (
                 f"{verb}{inner}: `{path}`\n"
                 f"{comment_line}"
@@ -255,6 +393,27 @@ class Zipka:
                 reply = self.proactive.attach(reply, follow)
             except Exception:
                 pass
+
+            if want_edits and path.is_dir() and result.get("is_project"):
+                try:
+                    pending = self.hard.propose(
+                        comment or text,
+                        project_root=path,
+                        context=result.get("digest") or "",
+                    )
+                    reply = self.proactive.attach(
+                        reply, self.hard.format_pending(pending)
+                    )
+                except Exception as exc:
+                    reply = self.proactive.attach(
+                        reply, f"Правки не подготовила: {exc}"
+                    )
+            elif path.is_dir() and result.get("is_project"):
+                reply = self.proactive.attach(
+                    reply,
+                    "Если нужно — скажи «предложи правки» по этому проекту "
+                    "(потребуется «разрешаю правку кода»).",
+                )
             return reply
         except Exception as exc:
             return f"Не смогла прочитать `{path}`: {exc}"
@@ -315,6 +474,29 @@ class Zipka:
             return None
         comment = match.group("c").strip().strip("\"'")
         return comment or None
+
+    @staticmethod
+    def _extract_mode(text: str) -> str | None:
+        match = _MODE_RE.search(text)
+        if not match:
+            return None
+        raw = match.group("m").lower()
+        if raw.startswith("book") or raw.startswith("книг"):
+            return "books"
+        if raw.startswith("code") or raw.startswith("код"):
+            return "code"
+        return "auto"
+
+    @staticmethod
+    def _extract_max_files(text: str) -> int | None:
+        match = _MAX_FILES_RE.search(text)
+        if not match:
+            return None
+        try:
+            n = int(match.group("n"))
+        except ValueError:
+            return None
+        return max(1, min(n, 80))
 
     @staticmethod
     def _extract_book_path(text: str) -> Path | None:

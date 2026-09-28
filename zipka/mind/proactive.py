@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -43,6 +44,7 @@ class ProactiveEngine:
         self.path = self.settings.data_dir / "mind" / "proactive.json"
         self.session_greeted = False
         self.session_turns = 0
+        self._greet_lock = threading.Lock()
         if not self.path.exists():
             self._save(self._default_state())
 
@@ -92,50 +94,88 @@ class ProactiveEngine:
             f"Настроение: {mind.get('mood')}\n"
         )
 
-    def greeting(self, *, force: bool = False) -> str | None:
-        if self.session_greeted and not force:
-            return None
-        state = self._load()
-        today = date.today().isoformat()
-        first_today = state.get("last_greeting_date") != today
-        hour = datetime.now().hour
-        if hour < 6:
-            daypart = "поздняя ночь"
-        elif hour < 12:
-            daypart = "утро"
-        elif hour < 18:
-            daypart = "день"
-        else:
-            daypart = "вечер"
+    @staticmethod
+    def _ts_is_local_today(ts: str | None) -> bool:
+        if not ts:
+            return False
+        try:
+            raw = ts.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            return dt.date() == date.today()
+        except ValueError:
+            return False
 
-        prompt = (
-            self._persona_bits()
-            + f"Сейчас {daypart}. "
-            + (
-                "Это первое приветствие за сегодня — поприветствуй пользователя "
-                "как Зипка, 1–3 предложения, можно лёгкий план на сессию."
-                if first_today
-                else "Сессия снова открыта — коротко поздоровайся без официоза."
-            )
-        )
-        if not self.llm.is_available():
-            text = (
-                f"Опять ты. {daypart.capitalize()}, я Зипка — на связи."
-                if first_today
-                else "Я тут. Давай."
-            )
-        else:
-            text = self.llm.chat(
-                [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": "Поприветствуй."},
-                ]
-            ).strip()
+    def _had_chat_today(self) -> bool:
+        """Уже был диалог сегодня — новое приветствие не нужно."""
+        try:
+            chunk = self.memory.chat_history(limit=80)
+        except Exception:
+            return False
+        for msg in reversed(chunk.get("messages") or []):
+            if self._ts_is_local_today(msg.get("ts")):
+                return True
+        return False
+
+    def _mark_greeted_today(self, state: dict[str, Any] | None = None) -> None:
+        data = state if state is not None else self._load()
+        data["last_greeting_date"] = date.today().isoformat()
+        self._save(data)
         self.session_greeted = True
-        state["last_greeting_date"] = today
-        self._save(state)
-        self._log("greeting", text)
-        return text
+
+    def greeting(self, *, force: bool = False) -> str | None:
+        """Одно приветствие при первом контакте за календарный день.
+
+        Повторные открытия web/CLI в тот же день — без нового «здравствуй».
+        """
+        with self._greet_lock:
+            if not force:
+                if self.session_greeted:
+                    return None
+                state = self._load()
+                today = date.today().isoformat()
+                if state.get("last_greeting_date") == today:
+                    self.session_greeted = True
+                    return None
+                if self._had_chat_today():
+                    # Уже общались сегодня — просто отмечаем день
+                    self._mark_greeted_today(state)
+                    return None
+
+            hour = datetime.now().hour
+            if hour < 6:
+                daypart = "поздняя ночь"
+            elif hour < 12:
+                daypart = "утро"
+            elif hour < 18:
+                daypart = "день"
+            else:
+                daypart = "вечер"
+
+            prompt = (
+                self._persona_bits()
+                + f"Сейчас {daypart}. "
+                + "Это первый контакт с пользователем за сегодня. "
+                + "Поприветствуй естественно, как в живом общении: 1–2 коротких "
+                + "предложения, без официоза и без списка пунктов. "
+                + "Не начинай каждое предложение с имени. Не прощайся."
+            )
+            if not self.llm.is_available():
+                text = f"Привет. {daypart.capitalize()} — я на связи."
+            else:
+                text = self.llm.chat(
+                    [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": "Поприветствуй коротко."},
+                    ]
+                ).strip()
+
+            # Сразу фиксируем день, чтобы reload/повторный запрос не дублировали hello
+            self._mark_greeted_today()
+            self._log("greeting", text)
+            self.memory.add_chat("assistant", text)
+            return text
 
     def bump_turn(self) -> None:
         self.session_turns += 1

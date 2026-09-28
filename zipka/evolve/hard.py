@@ -20,9 +20,38 @@ APPROVE_PHRASES = {
     "approve patch",
 }
 
+BLOCKED_NAMES = {
+    ".env",
+    ".env.local",
+    "credentials.json",
+    "secrets.json",
+    "id_rsa",
+    "id_ed25519",
+}
+
+EDITABLE_SUFFIXES = {
+    ".py",
+    ".html",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".css",
+    ".md",
+    ".yaml",
+    ".yml",
+    ".txt",
+    ".json",
+    ".toml",
+    ".go",
+    ".rs",
+    ".java",
+    ".cs",
+}
+
 
 class HardEvolve:
-    """Правки собственного кода только после явного approve."""
+    """Правки кода только после явного approve (Zipka и/или изученный проект)."""
 
     def __init__(
         self,
@@ -36,10 +65,64 @@ class HardEvolve:
         ensure_data_dirs(self.settings)
         self.patches_dir = self.settings.data_dir / "patches"
         self.pending_path = self.patches_dir / "pending.json"
+        self.projects_path = self.settings.data_dir / "mind" / "projects.json"
         self.allowed_roots = [
             self.settings.package_dir.resolve(),
             self.settings.web_dir.resolve(),
         ]
+        self._load_project_roots()
+
+    def _load_project_roots(self) -> None:
+        if not self.projects_path.exists():
+            return
+        try:
+            data = json.loads(self.projects_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        for item in data.get("roots") or []:
+            try:
+                root = Path(item).expanduser().resolve()
+            except OSError:
+                continue
+            if root.is_dir() and root not in self.allowed_roots:
+                self.allowed_roots.append(root)
+
+    def remember_project(self, path: str | Path) -> Path:
+        root = Path(path).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError(f"Не папка: {root}")
+        data = {"roots": [], "last": str(root)}
+        if self.projects_path.exists():
+            try:
+                data = json.loads(self.projects_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
+        roots = [str(root)]
+        for r in data.get("roots") or []:
+            if r != str(root):
+                roots.append(r)
+        data["roots"] = roots[:8]
+        data["last"] = str(root)
+        self.projects_path.parent.mkdir(parents=True, exist_ok=True)
+        self.projects_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        if root not in self.allowed_roots:
+            self.allowed_roots.append(root)
+        return root
+
+    def last_project(self) -> Path | None:
+        if not self.projects_path.exists():
+            return None
+        try:
+            data = json.loads(self.projects_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        last = data.get("last")
+        if not last:
+            return None
+        p = Path(last)
+        return p if p.exists() else None
 
     def wants_code_change(self, text: str) -> bool:
         lowered = text.lower()
@@ -52,6 +135,12 @@ class HardEvolve:
             "добавь в код",
             "hard evolve",
             "перепиши файл",
+            "предложи правки",
+            "внеси правки",
+            "поправь проект",
+            "измени проект",
+            "сделай правки",
+            "отрефактори",
         ]
         return any(k in lowered for k in keys)
 
@@ -70,25 +159,44 @@ class HardEvolve:
         if self.pending_path.exists():
             self.pending_path.unlink()
 
-    def propose(self, request: str) -> dict[str, Any]:
-        tree = self._list_editable_files()
+    def propose(
+        self,
+        request: str,
+        *,
+        project_root: str | Path | None = None,
+        context: str | None = None,
+    ) -> dict[str, Any]:
+        root = None
+        if project_root:
+            root = self.remember_project(project_root)
+        else:
+            root = self.last_project()
+
+        base = root or ROOT_DIR
+        tree = self._list_editable_files(prefer_root=root)
+        scope_hint = (
+            f"Проект: {root}. Пути указывай относительно этой папки."
+            if root
+            else "Можно менять файлы внутри zipka/ и web/ (пути от корня Zipka)."
+        )
         raw = self.llm.chat(
             [
                 {
                     "role": "system",
                     "content": (
                         "Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON:\n"
-                        '{"files": [{"path": "zipka/relative/or/web/...", '
+                        '{"files": [{"path": "relative/path.ext", '
                         '"content": "полный новый текст файла"}]}\n'
-                        "Можно менять только файлы внутри zipka/ и web/. "
-                        "Не трогай .env и секреты."
+                        f"{scope_hint} Не трогай .env и секреты."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Запрос: {request}\n\nДоступные файлы:\n"
-                        + "\n".join(tree[:80])
+                        f"Запрос: {request}\n\n"
+                        + (f"Контекст изучения:\n{context[:8000]}\n\n" if context else "")
+                        + "Доступные файлы:\n"
+                        + "\n".join(tree[:100])
                     ),
                 },
             ]
@@ -100,19 +208,31 @@ class HardEvolve:
             content = item.get("content")
             if not rel or content is None:
                 continue
-            abs_path = (ROOT_DIR / rel).resolve()
+            if Path(rel).name.lower() in BLOCKED_NAMES:
+                continue
+            abs_path = (base / rel).resolve() if root else (ROOT_DIR / rel).resolve()
             if not self._is_allowed(abs_path):
                 continue
-            files.append({"path": rel, "content": content})
+            # store path relative to base for apply
+            try:
+                store_rel = abs_path.relative_to(base).as_posix() if root else abs_path.relative_to(ROOT_DIR).as_posix()
+            except ValueError:
+                continue
+            files.append({"path": store_rel, "content": content})
         if not files:
             raise RuntimeError(
                 "Не удалось сформировать безопасный патч. Уточни, какой файл править."
             )
-        patch_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        patch_id = (
+            datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            + "-"
+            + uuid.uuid4().hex[:8]
+        )
         pending = {
             "id": patch_id,
             "request": request,
             "files": files,
+            "project_root": str(root) if root else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending_approval",
         }
@@ -121,7 +241,12 @@ class HardEvolve:
         )
         self.memory.log_evolve(
             "hard_propose",
-            {"id": patch_id, "files": [f["path"] for f in files], "request": request},
+            {
+                "id": patch_id,
+                "files": [f["path"] for f in files],
+                "request": request,
+                "project_root": pending["project_root"],
+            },
         )
         return pending
 
@@ -130,6 +255,14 @@ class HardEvolve:
         if not pending:
             raise RuntimeError("Нет ожидающего патча.")
         patch_id = pending["id"]
+        base = (
+            Path(pending["project_root"]).resolve()
+            if pending.get("project_root")
+            else ROOT_DIR
+        )
+        if pending.get("project_root"):
+            self.remember_project(base)
+
         backup_dir = self.patches_dir / patch_id / "backup"
         new_dir = self.patches_dir / patch_id / "new"
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -138,9 +271,11 @@ class HardEvolve:
         applied = []
         for item in pending["files"]:
             rel = item["path"]
-            abs_path = (ROOT_DIR / rel).resolve()
+            abs_path = (base / rel).resolve()
             if not self._is_allowed(abs_path):
                 raise RuntimeError(f"Путь вне sandbox: {rel}")
+            if abs_path.name.lower() in BLOCKED_NAMES:
+                raise RuntimeError(f"Файл запрещён: {rel}")
             backup_file = backup_dir / rel
             backup_file.parent.mkdir(parents=True, exist_ok=True)
             if abs_path.exists():
@@ -159,6 +294,7 @@ class HardEvolve:
             "applied_at": datetime.now(timezone.utc).isoformat(),
             "files": applied,
             "request": pending.get("request"),
+            "project_root": pending.get("project_root"),
         }
         (self.patches_dir / patch_id / "meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -170,14 +306,21 @@ class HardEvolve:
     def rollback(self, patch_id: str) -> dict[str, Any]:
         backup_dir = self.patches_dir / patch_id / "backup"
         new_dir = self.patches_dir / patch_id / "new"
+        meta_path = self.patches_dir / patch_id / "meta.json"
         if not backup_dir.exists():
             raise RuntimeError(f"Бэкап {patch_id} не найден.")
+        base = ROOT_DIR
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("project_root"):
+                base = Path(meta["project_root"]).resolve()
+                self.remember_project(base)
         restored: list[str] = []
         for backup_file in backup_dir.rglob("*"):
             if not backup_file.is_file():
                 continue
             rel = backup_file.relative_to(backup_dir).as_posix()
-            target = (ROOT_DIR / rel).resolve()
+            target = (base / rel).resolve()
             if not self._is_allowed(target):
                 continue
             content = backup_file.read_text(encoding="utf-8")
@@ -197,8 +340,10 @@ class HardEvolve:
         pending = pending or self.load_pending()
         if not pending:
             return "Нет ожидающего патча."
+        root = pending.get("project_root") or str(ROOT_DIR)
         lines = [
             f"Патч {pending['id']} ждёт approve.",
+            f"Корень: {root}",
             f"Запрос: {pending.get('request', '')}",
             "Файлы:",
             *[f"- {f['path']} ({len(f['content'])} символов)" for f in pending["files"]],
@@ -211,19 +356,43 @@ class HardEvolve:
             resolved = path.resolve()
         except OSError:
             return False
+        if resolved.name.lower() in BLOCKED_NAMES:
+            return False
         return any(
             resolved == root or root in resolved.parents for root in self.allowed_roots
         )
 
-    def _list_editable_files(self) -> list[str]:
+    def _list_editable_files(
+        self, *, prefer_root: Path | None = None
+    ) -> list[str]:
         files: list[str] = []
-        for root in self.allowed_roots:
-            if not root.exists():
+        roots = [prefer_root] if prefer_root else self.allowed_roots
+        if prefer_root and prefer_root not in self.allowed_roots:
+            roots = [prefer_root, *self.allowed_roots]
+        for root in roots:
+            if not root or not root.exists():
                 continue
             for p in root.rglob("*"):
-                if p.is_file() and p.suffix in {".py", ".html", ".js", ".css", ".md", ".yaml", ".yml", ".txt"}:
-                    files.append(p.relative_to(ROOT_DIR).as_posix())
-        return sorted(files)
+                if not p.is_file():
+                    continue
+                if any(part in {".git", "node_modules", ".venv", "venv", "__pycache__"} for part in p.parts):
+                    continue
+                if p.suffix.lower() not in EDITABLE_SUFFIXES:
+                    continue
+                if p.name.lower() in BLOCKED_NAMES:
+                    continue
+                try:
+                    files.append(p.relative_to(root).as_posix())
+                except ValueError:
+                    continue
+        # unique keep order
+        seen = set()
+        out = []
+        for f in files:
+            if f not in seen:
+                seen.add(f)
+                out.append(f)
+        return out
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:

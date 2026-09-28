@@ -9,6 +9,31 @@ if not exist ".venv\Scripts\python.exe" (
   exit /b 1
 )
 
+where npm >nul 2>&1
+if errorlevel 1 (
+  echo [Zipka] npm не найден — нужен Node.js для React UI
+  pause
+  exit /b 1
+)
+
+if not exist "web\frontend\dist\index.html" (
+  echo [Zipka] Сборка React UI...
+  pushd web\frontend
+  call npm install
+  if errorlevel 1 (
+    popd
+    pause
+    exit /b 1
+  )
+  call npm run build
+  if errorlevel 1 (
+    popd
+    pause
+    exit /b 1
+  )
+  popd
+)
+
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 

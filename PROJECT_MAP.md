@@ -50,10 +50,11 @@ zipka/
     net/learner.py
     safety/policy.py
   web/
-    app.py
-    static/index.html
-    static/style.css
-    static/app.js
+    app.py                 # FastAPI: /api/* + раздача React build
+    frontend/              # React + Vite + @mui/material
+      src/App.tsx
+      src/components/
+      dist/                # npm run build → сюда (gitignore)
 ```
 
 ## Запуск

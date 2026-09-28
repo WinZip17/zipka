@@ -6,11 +6,11 @@
 
 1. Мягкая самоэволюция (характер, навыки, предпочтения)
 2. Правки своего кода только после фразы `разрешаю правку кода`
-3. Характер Зипки + чтение книг и исходников (txt/md/fb2/py/js/ts/…, zip/rar, папки)
+3. Характер Зипки + чтение книг и исходников (txt/md/fb2/djvu/py/js/ts/…, zip/rar, папки)
 4. Глаза (webcam) и уши (mic + faster-whisper)
 5. Цели и рефлексия (псевдоразум)
 6. Самообучение по сети (GET, allowlist)
-7. CLI + web UI
+7. CLI + web UI (React + MUI)
 
 ## Быстрый старт
 
@@ -23,12 +23,21 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env
 # в .env укажи модель из `ollama list` (сейчас по умолчанию my_qwen:latest)
+
+# web UI (React + @mui/material) — один раз собрать:
+cd web\frontend
+npm install
+npm run build
+cd ..\..
+
 python -m zipka.main status
 python -m zipka.main chat
 python -m zipka.main web
 ```
 
 Web: http://127.0.0.1:8765
+
+Разработка UI: в одном терминале `python -m zipka.main web`, в другом `cd web/frontend && npm run dev` (Vite на :5173, API проксируется).
 
 ## Запуск ярлыком
 
@@ -52,21 +61,26 @@ Web: http://127.0.0.1:8765
    ```
    прочитай C:\Users\WinZip\Desktop\книга.fb2
    изучи D:\Project2\zipka\zipka\agent.py комментарий: разбери soft-evolve
+   изучи папку D:\Project2\zipka\zipka
+   изучи папку D:\Books режим: books
+   изучи папку D:\myapp режим: code предложи правки комментарий: упростить API
    прочитай D:\books\archive.zip внутри main.py комментарий: только API
    что в архиве D:\books\archive.zip
    ```
-2. **Загрузить файл в web**: кнопка `+` / drag-drop → появится поле **комментария** → «Изучить с комментарием»  
-   (без комментария тоже можно — просто нажми «Изучить»).
+2. **Загрузить файл в web** (как в мессенджере): кнопка `+` или drag-drop → чип с именем файла над полем ввода → напиши сообщение (это и есть комментарий к файлу) → **Отправить**.  
+   Можно отправить только файл без текста.
 3. **CLI**:
    ```bash
-   python -m zipka.main read PATH -c "разбери обработку ошибок"
-   python -m zipka.main read PATH --list
-   python -m zipka.main read PATH -m file.py -c "фокус на main"
+   python -m zipka.main read PATH -c "разбери ошибки" --mode code --max-files 30
+   python -m zipka.main read PROJECT_DIR --edits -c "добавь логирование"
    ```
 
 Для кода Зипка делает разбор: назначение, API, зависимости, паттерны (не копирует длинные куски).  
-Папка: до 12 исходников (пропуская `node_modules`, `.venv`, `.git`…).  
-Заметки кода пишутся в `notes.jsonl` с kind=`code`.
+Папка: до 24 файлов по умолчанию (книги и/или код; без `node_modules` / `.venv` / `.git`).  
+После изучения проекта можно сказать «предложи правки» — патч только с `разрешаю правку кода`.  
+DJVU: читается через встроенный пакет **`djvu-rs`** (не нужен системный DjVuLibre).  
+Сканы без текстового слоя (без OCR) прочитать нельзя — нужен файл с уже распознанным текстом.  
+Опционально: если установлен DjVuLibre (`djvutxt`), он используется как запасной путь.
 
 | Команда | Описание |
 |--------|----------|
@@ -75,9 +89,9 @@ Web: http://127.0.0.1:8765
 | `python -m zipka.main read PATH` | Книга/код/папка/архив |
 | `python -m zipka.main read PATH --list` | Список файлов в архиве |
 | `python -m zipka.main read PATH -m file.py` | Файл внутри архива |
-| `python -m zipka.main eyes on\|off\|snap` | Камера |
+| `python -m zipka.main eyes on\|off\|snap\|screen\|window` | Камера / экран / окно |
 | `python -m zipka.main ears on\|off\|listen` | Микрофон |
-| `python -m zipka.main reflect` | Рефлексия |
+| `python -m zipka.main reset-learning` | Сброс всего обучения (с подтверждением) |
 | `python -m zipka.main learn URL\|тема` | Сеть |
 | `python -m zipka.main rollback ID` | Откат патча |
 | `python -m zipka.main web` | Web UI |
@@ -86,7 +100,7 @@ Web: http://127.0.0.1:8765
 
 Зипка может заговорить первой:
 
-1. **Приветствие** — при старте CLI-чата / открытии web  
+1. **Приветствие** — один раз при первом контакте за день (web/CLI); повторные открытия в тот же день — без нового «привет»  
 2. **Реплики по целям** — roughly каждые 5 реплик в сессии  
 3. **Уточнения** — после изучения книги/кода (1–2 вопроса)  
 4. **Комментарии глаз/ушей** — только если сочла наблюдение интересным  

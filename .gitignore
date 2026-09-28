@@ -25,6 +25,10 @@ htmlcov/
 Thumbs.db
 desktop.ini
 
+# --- frontend (React / Vite) ---
+web/frontend/node_modules/
+web/frontend/dist/
+
 # --- runtime learning data (start clean from clone) ---
 # Keep only scaffolding + examples under data/
 data/memory/

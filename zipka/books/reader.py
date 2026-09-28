@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import zipfile
@@ -9,8 +10,9 @@ from xml.etree import ElementTree as ET
 from zipka.config import Settings, ensure_data_dirs, get_settings
 from zipka.llm.ollama_client import OllamaClient
 from zipka.memory.store import MemoryStore
+from zipka.system_limits import max_book_bytes
 
-BOOK_SUFFIXES = {".txt", ".md", ".markdown", ".fb2", ".xml"}
+BOOK_SUFFIXES = {".txt", ".md", ".markdown", ".fb2", ".xml", ".djvu", ".djv"}
 
 CODE_SUFFIXES = {
     ".py",
@@ -113,7 +115,9 @@ SKIP_DIR_NAMES = {
     "coverage",
 }
 
-MAX_FILE_BYTES = 1_500_000
+MAX_CODE_BYTES = 1_500_000
+# Динамический потолок для книг/архивов (см. zipka.system_limits.max_book_bytes)
+MAX_BOOK_BYTES = max_book_bytes()
 
 
 class BookReader:
@@ -139,8 +143,9 @@ class BookReader:
         *,
         max_chunks: int = 6,
         member: str | None = None,
-        max_files: int = 12,
+        max_files: int = 24,
         comment: str | None = None,
+        mode: str | None = None,
     ) -> dict:
         file_path = Path(path).expanduser().resolve()
         if not file_path.exists():
@@ -152,6 +157,7 @@ class BookReader:
                 max_chunks=max_chunks,
                 max_files=max_files,
                 comment=comment,
+                mode=mode,
             )
 
         source_label = file_path.name
@@ -186,16 +192,27 @@ class BookReader:
         max_chunks: int,
         max_files: int,
         comment: str | None = None,
+        mode: str | None = None,
     ) -> dict:
-        files = self._collect_source_files(directory)[:max_files]
+        files = self._collect_readable_files(directory, mode=mode)[:max_files]
         if not files:
             raise RuntimeError(
-                f"В `{directory}` нет читаемых исходников "
-                f"({', '.join(sorted(CODE_SUFFIXES)[:12])}…)."
+                f"В `{directory}` нет читаемых файлов "
+                f"(книги/исходники). Проверь расширения или mode=books|code."
             )
+
+        book_n = sum(1 for f in files if self._kind_for(f) == "book")
+        code_n = len(files) - book_n
+        if book_n and code_n:
+            folder_kind = "folder_mixed"
+        elif code_n:
+            folder_kind = "folder_code"
+        else:
+            folder_kind = "folder_books"
+
         digests: list[str] = []
         total_chunks = 0
-        per_file_chunks = max(2, max_chunks // max(1, min(len(files), 4)))
+        per_file_chunks = max(2, max_chunks // max(1, min(len(files), 5)))
         for fp in files:
             part = self._summarize_file(
                 fp,
@@ -211,19 +228,46 @@ class BookReader:
             total_chunks += part["chunks"]
 
         digest = "\n\n".join(digests)
+        overview = ""
+        try:
+            overview = self.llm.summarize(
+                digest[:14000],
+                instruction=(
+                    f"Сделай обзор папки «{directory.name}» ({folder_kind}): "
+                    f"книг={book_n}, кода={code_n}. Структура, назначение, "
+                    "главные темы/модули, на что обратить внимание."
+                    + (
+                        f" Фокус пользователя: {comment}"
+                        if comment
+                        else ""
+                    )
+                ),
+            )
+        except Exception:
+            overview = ""
+
         out = self.notes_dir / f"{directory.name}_dir_digest.md"
-        header = f"# Изучение папки: {directory}\n\nФайлов: {len(files)}\n"
+        header = (
+            f"# Изучение папки: {directory}\n\n"
+            f"Тип: {folder_kind}\n"
+            f"Файлов: {len(files)} (книги={book_n}, код={code_n})\n"
+        )
         if comment:
             header += f"\nКомментарий пользователя: {comment}\n"
+        if overview:
+            header += f"\n## Обзор\n\n{overview}\n"
         out.write_text(f"{header}\n{digest}\n", encoding="utf-8")
+
+        note_kind = "code" if folder_kind != "folder_books" else "book"
         self.memory.add_note(
-            "code",
-            f"Изучена папка {directory} ({len(files)} файлов)."
+            note_kind,
+            (overview or f"Изучена папка {directory} ({len(files)} файлов).")
             + (f" Комментарий: {comment}" if comment else ""),
             meta={
                 "source": str(directory),
                 "files": [str(f) for f in files],
                 "comment": comment,
+                "folder_kind": folder_kind,
             },
         )
         return {
@@ -231,10 +275,14 @@ class BookReader:
             "archive_member": None,
             "chunks": total_chunks,
             "digest_path": str(out),
-            "digest": digest,
-            "kind": "code_dir",
+            "digest": (overview + "\n\n" + digest) if overview else digest,
+            "overview": overview,
+            "kind": folder_kind,
             "files": [str(f) for f in files],
             "comment": comment,
+            "book_count": book_n,
+            "code_count": code_n,
+            "is_project": folder_kind in {"folder_code", "folder_mixed"},
         }
 
     def _summarize_file(
@@ -328,30 +376,59 @@ class BookReader:
             f"{focus}"
         )
 
-    def _collect_source_files(self, root: Path) -> list[Path]:
+    def _collect_readable_files(
+        self, root: Path, *, mode: str | None = None
+    ) -> list[Path]:
+        mode = (mode or "auto").lower()
+        if mode == "books":
+            allowed = BOOK_SUFFIXES
+        elif mode == "code":
+            allowed = CODE_SUFFIXES
+        else:
+            allowed = READABLE_SUFFIXES
+
         found: list[Path] = []
         for path in sorted(root.rglob("*")):
             if not path.is_file():
                 continue
             if any(part in SKIP_DIR_NAMES for part in path.parts):
                 continue
-            if path.suffix.lower() not in CODE_SUFFIXES:
+            if path.suffix.lower() not in allowed:
                 continue
             try:
-                if path.stat().st_size > MAX_FILE_BYTES:
+                size = path.stat().st_size
+                limit = (
+                    MAX_BOOK_BYTES
+                    if path.suffix.lower() in BOOK_SUFFIXES
+                    else MAX_CODE_BYTES
+                )
+                if size > limit:
                     continue
             except OSError:
                 continue
             found.append(path)
-        # Prefer "core" files first: shorter path, then common entry names
+
         def rank(p: Path) -> tuple:
             name = p.name.lower()
             boost = 0
-            if name in {"main.py", "app.py", "index.ts", "index.js", "main.ts", "main.go"}:
+            if name in {
+                "main.py",
+                "app.py",
+                "index.ts",
+                "index.js",
+                "main.ts",
+                "main.go",
+                "readme.md",
+            }:
                 boost = -10
+            if p.suffix.lower() in CODE_SUFFIXES:
+                boost -= 1
             return (boost, len(p.parts), str(p).lower())
 
         return sorted(found, key=rank)
+
+    def _collect_source_files(self, root: Path) -> list[Path]:
+        return self._collect_readable_files(root, mode="code")
 
     def _extract_book(
         self, archive: Path, *, member: str | None = None
@@ -385,6 +462,8 @@ class BookReader:
             )
         for preferred in (
             ".fb2",
+            ".djvu",
+            ".djv",
             ".py",
             ".ts",
             ".tsx",
@@ -474,7 +553,8 @@ class BookReader:
 
     def _load_text(self, path: Path) -> str:
         suffix = path.suffix.lower()
-        # Skip obvious binaries by size already handled; read as text
+        if suffix in {".djvu", ".djv"}:
+            return self._djvu_to_text(path)
         raw = path.read_text(encoding="utf-8", errors="ignore")
         if suffix in {".txt", ".md", ".markdown"}:
             return raw
@@ -482,8 +562,104 @@ class BookReader:
             suffix == ".xml" and "<FictionBook" in raw[:2000]
         ):
             return self._fb2_to_text(raw)
-        # code and other text formats as-is
         return raw
+
+    def _find_djvutxt(self) -> str | None:
+        """Найти djvutxt в PATH или типичных путях Windows."""
+        found = shutil.which("djvutxt") or shutil.which("djvutxt.exe")
+        if found:
+            return found
+        candidates = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "DjVuLibre"
+            / "djvutxt.exe",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+            / "DjVuLibre"
+            / "djvutxt.exe",
+            Path(r"C:\DjVuLibre\djvutxt.exe"),
+            Path.home() / "AppData" / "Local" / "Programs" / "DjVuLibre" / "djvutxt.exe",
+        ]
+        for path in candidates:
+            if path.is_file():
+                return str(path)
+        return None
+
+    def _djvu_to_text(self, path: Path) -> str:
+        """Извлечь текст из DJVU: сначала встроенный djvu-rs, затем djvutxt."""
+        text = self._djvu_via_rs(path)
+        if text is not None:
+            return text
+
+        import subprocess
+
+        djvutxt = self._find_djvutxt()
+        if djvutxt:
+            try:
+                proc = subprocess.run(
+                    [djvutxt, str(path)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                    timeout=180,
+                    check=False,
+                )
+                text = (proc.stdout or "").strip()
+                if text:
+                    return text
+                err = (proc.stderr or "").strip()
+                raise RuntimeError(
+                    "djvutxt не извлёк текст из DJVU"
+                    + (f": {err}" if err else " (пустой текстовый слой / скан без OCR).")
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RuntimeError(f"djvutxt не смог прочитать DJVU: {exc}") from exc
+
+        raise RuntimeError(
+            "Не удалось прочитать DJVU.\n"
+            "Установи зависимость: pip install djvu-rs\n"
+            "Если файл — скан без текстового слоя (без OCR), текста в нём нет."
+        )
+
+    def _djvu_via_rs(self, path: Path) -> str | None:
+        """Читалка на djvu-rs (wheel, без системного DjVuLibre). None = пакет нет."""
+        try:
+            import djvu_rs
+        except ImportError:
+            return None
+
+        try:
+            doc = djvu_rs.Document.open(str(path.resolve()))
+            parts: list[str] = []
+            for i in range(doc.page_count()):
+                page = doc.page(i)
+                chunk = ""
+                try:
+                    raw = page.text()
+                    if raw:
+                        chunk = str(raw).strip()
+                except Exception:
+                    chunk = ""
+                if not chunk:
+                    try:
+                        layer = page.text_layer()
+                        if layer is not None:
+                            chunk = str(layer).strip()
+                    except Exception:
+                        pass
+                if chunk:
+                    parts.append(chunk)
+            joined = "\n\n".join(parts).strip()
+            if not joined:
+                raise RuntimeError(
+                    "DJVU открыт (djvu-rs), но текстовый слой пуст "
+                    "(возможно, это скан без OCR)."
+                )
+            return joined
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Не удалось разобрать DJVU (djvu-rs): {exc}") from exc
 
     def _fb2_to_text(self, raw: str) -> str:
         cleaned = re.sub(r'xmlns(:\w+)?="[^"]+"', "", raw)
