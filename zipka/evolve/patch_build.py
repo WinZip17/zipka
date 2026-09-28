@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -230,6 +231,29 @@ def basic_syntax_problems(rel: str, content: str, original: str | None) -> str |
         for marker in ("onKeyDown", "FILE_ACCEPT", "export function", "disabled={disabled}"):
             if marker in original and marker not in content:
                 problems.append(f"пропал важный фрагмент «{marker}»")
+    path_l = rel.replace("\\", "/").lower()
+    if path_l.endswith(".py"):
+        try:
+            tree = ast.parse(content)
+        except SyntaxError as exc:
+            problems.append(
+                f"невалидный Python (SyntaxError: {exc.msg} line {exc.lineno})"
+            )
+        else:
+            new_defs = {
+                n.name
+                for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            # «def foo» в тексте, но нет в AST → чаще всего вставка в docstring
+            for m in re.finditer(r"(?m)^\s*def\s+([A-Za-z_]\w*)\s*\(", content):
+                fname = m.group(1)
+                if fname not in new_defs:
+                    problems.append(
+                        f"«def {fname}» есть в тексте, но не в AST "
+                        "(похоже, вставка внутрь docstring/строки)"
+                    )
+                    break
     return "; ".join(problems) if problems else None
 
 
