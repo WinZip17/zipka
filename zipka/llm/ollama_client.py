@@ -7,6 +7,7 @@ import httpx
 
 from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
+from zipka.runtime_settings import resolve_gpu_layers
 
 
 @dataclass
@@ -56,27 +57,61 @@ class OllamaClient:
         model: str | None = None,
         stream: bool = False,
         images: list[str] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         model = model or self.settings.ollama_model
-        payload_messages = list(messages)
+        payload_messages: list[dict[str, Any]] = []
+        for m in messages:
+            role = str(m.get("role") or "user")
+            content = m.get("content")
+            if content is None:
+                content = ""
+            elif not isinstance(content, str):
+                content = str(content)
+            payload_messages.append({"role": role, "content": content})
         if images and payload_messages:
             last = dict(payload_messages[-1])
             last["images"] = images
             payload_messages[-1] = last
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": payload_messages,
             "stream": stream,
         }
+        options: dict[str, Any] = {}
+        if temperature is not None:
+            options["temperature"] = float(temperature)
+        if max_tokens is not None:
+            # Ollama: num_predict; слишком большое значение на маленьком ctx → 400
+            options["num_predict"] = max(64, min(int(max_tokens), 2048))
+        # 0 = CPU, -1 = все слои на GPU (если Ollama собрана с CUDA)
+        try:
+            options["num_gpu"] = int(resolve_gpu_layers(self.settings))
+        except Exception:
+            pass
+        if options:
+            payload["options"] = options
         try:
             with httpx.Client(timeout=180.0) as client:
                 if stream:
                     return "".join(self._stream_chat(client, payload))
                 r = client.post(f"{self.base}/api/chat", json=payload)
-                r.raise_for_status()
+                if r.status_code >= 400 and options:
+                    # повтор без options — часть сборок/моделей ругается на options
+                    payload.pop("options", None)
+                    r = client.post(f"{self.base}/api/chat", json=payload)
+                if r.status_code >= 400:
+                    detail = (r.text or "").strip()[:500]
+                    raise OllamaError(
+                        f"Ollama HTTP {r.status_code} для модели «{model}»: "
+                        f"{detail or r.reason_phrase}"
+                    )
                 data = r.json()
                 return data.get("message", {}).get("content", "")
+        except OllamaError:
+            raise
         except httpx.HTTPError as exc:
             raise OllamaError(f"Ошибка Ollama chat: {exc}") from exc
 

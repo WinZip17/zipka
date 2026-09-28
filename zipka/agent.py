@@ -27,6 +27,7 @@ from zipka.reset import (
     is_reset_request,
     reset_learning_data,
 )
+from zipka.runtime_settings import compute_status, save_runtime
 from zipka.safety.policy import SafetyPolicy
 from zipka.sensors.ears import Ears
 from zipka.sensors.eyes import Eyes
@@ -170,10 +171,47 @@ class Zipka:
                 "ram_available_human": format_bytes(avail) if avail else None,
             },
             "user": self.user.summary_for_ui(),
+            "compute": compute_status(self.settings),
+        }
+
+    def set_compute(
+        self,
+        mode: str,
+        *,
+        gpu_layers: int | None = None,
+    ) -> dict[str, Any]:
+        """Переключить CPU / GPU / hybrid и перезагрузить LLM."""
+        patch: dict[str, Any] = {"compute_mode": mode}
+        if gpu_layers is not None:
+            patch["gpu_layers"] = gpu_layers
+        save_runtime(patch, self.settings)
+        if hasattr(self.llm, "unload"):
+            try:
+                self.llm.unload()
+            except Exception:
+                pass
+        self.llm = create_llm_client(self.settings)
+        for holder in (
+            self.soft,
+            self.hard,
+            self.books,
+            self.mind,
+            self.proactive,
+            self.net,
+            self.user,
+        ):
+            if hasattr(holder, "llm"):
+                holder.llm = self.llm
+        return {
+            "ok": True,
+            "compute": compute_status(self.settings),
+            "llm": describe_backend(self.llm),
         }
 
     def build_messages(self, user_text: str) -> list[dict[str, str]]:
-        notes = [n["text"] for n in self.memory.recent_notes(limit=8)]
+        note_limit = 4 if getattr(self.llm, "backend", "") == "gguf" else 8
+        hist_limit = 6 if getattr(self.llm, "backend", "") == "gguf" else 16
+        notes = [n["text"] for n in self.memory.recent_notes(limit=note_limit)]
         system = self.persona.system_prompt(
             skills=self.memory.get_skills(),
             preferences=self.memory.get_preferences(),
@@ -185,7 +223,7 @@ class Zipka:
             "\nПользователь может дать путь к книге или исходному коду "
             "(.py/.js/.ts/…), папке с кодом, zip/rar — или загрузить файл в web."
         )
-        history = self.memory.recent_chat(limit=16)
+        history = self.memory.recent_chat(limit=hist_limit)
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_text})

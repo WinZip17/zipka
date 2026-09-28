@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from zipka.config import ROOT_DIR, Settings, ensure_data_dirs, get_settings
+from zipka.evolve.patch_build import materialize_patch, number_lines
 from zipka.memory.store import MemoryStore
 
 APPROVE_PHRASE = "разрешаю правку кода"
@@ -52,15 +53,27 @@ EDITABLE_SUFFIXES = {
 FRONTEND_EDIT_RULES = """
 Правила UI (web/frontend, React + MUI v9 + Emotion):
 1. Стили ТОЛЬКО через prop sx={{ ... }} или theme. Никакого нативного CSS в JSX.
-2. Запрещено: style="color:red", style={'color: red'}, <style>...</style>,
-   class="...", inline CSS-строки, отдельные .css ради одной кнопки.
-3. В sx используй camelCase: backgroundColor, borderRadius, fontSize — не
-   background-color / border-radius.
-4. Не подменяй MUI-компоненты (Box, Stack, Button, InputBase, Typography…) на
-   голые div/button/input, если задача этого не требует.
-5. Сохраняй существующие импорты @mui/material и @mui/icons-material.
-6. Не пиши CSS-селекторы (.class {}, #id {}) внутрь TSX/JSX.
-7. Меняй минимум строк; копируй стиль соседнего кода один в один.
+2. Запрещено: style=\"...\", <style>, class=\"...\", CSS-селекторы в TSX.
+3. В sx: camelCase; одно двоеточие — bgcolor: \"#007BFF\" (никогда bgcolor:=).
+4. Не подменяй MUI-компоненты на голые div/button без нужды.
+5. Сохраняй импорты, onKeyDown, disabled и подписи — меняй только запрошенное.
+6. Формат: edits old→new, НЕ переписывай файл целиком.
+""".strip()
+
+PATCH_SYSTEM = """
+Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON без markdown.
+
+Формат (точечные правки):
+{\"files\":[{\"path\":\"relative/path.ext\",\"edits\":[{\"old\":\"точный уникальный фрагмент ИЗ ФАЙЛА\",\"new\":\"замена\"}]}]}
+
+Для НОВОГО файла:
+{\"files\":[{\"path\":\"relative/path.ext\",\"content\":\"полный текст\"}]}
+
+Правила:
+- old копируй 1:1 из текущего файла (включая отступы), встречается ровно 1 раз.
+- Обычно 1 файл и 1–3 edits. Не дублируй весь файл в content, если файл уже есть.
+- Не трогай .env, secrets, node_modules, dist.
+- Синтаксис должен остаться валидным (скобки, кавычки, JSX).
 """.strip()
 
 
@@ -348,14 +361,19 @@ class HardEvolve:
 
         base = root or ROOT_DIR
         tree = self._list_editable_files(prefer_root=root)
-        focus_files = self._pick_focus_files(request, tree, limit=4)
+        focus_files = self._pick_focus_files(request, tree, limit=2)
+        originals: dict[str, str] = {}
         focus_blobs: list[str] = []
         for rel in focus_files:
             abs_path = (base / rel).resolve()
             try:
                 if abs_path.is_file() and abs_path.stat().st_size < 120_000:
                     body = abs_path.read_text(encoding="utf-8", errors="ignore")
-                    focus_blobs.append(f"### {rel}\n```\n{body}\n```")
+                    originals[rel.replace("\\", "/")] = body
+                    numbered = number_lines(body, max_chars=14_000)
+                    focus_blobs.append(
+                        "### " + rel + "\n```\n" + numbered + "\n```"
+                    )
             except OSError:
                 continue
 
@@ -363,9 +381,8 @@ class HardEvolve:
             f"Проект: {root}. Пути указывай относительно этой папки."
             if root
             else (
-                "Это самоправка Зипки. Пути относительно корня репозитория Zipka, "
-                "например: zipka/agent.py, web/frontend/src/components/Composer.tsx. "
-                "Меняй только zipka/ и web/. UI чата — в web/frontend/src/."
+                "Самоправка Зипки. Пути от корня репо, например "
+                "web/frontend/src/components/Composer.tsx. Только zipka/ и web/."
             )
         )
         touches_frontend = any(
@@ -387,72 +404,73 @@ class HardEvolve:
                 "инпут",
                 "поле ввода",
                 "frontend",
+                "цвет",
             )
         )
-        system = (
-            "Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON:\n"
-            '{"files": [{"path": "relative/path.ext", '
-            '"content": "полный новый текст файла"}]}\n'
-            f"{scope_hint} Не трогай .env, secrets, node_modules, dist. "
-            "Меняй минимум файлов. "
-        )
+        system = PATCH_SYSTEM + "\n" + scope_hint
         if touches_frontend or self_edit:
             system += "\n" + FRONTEND_EDIT_RULES
-        else:
-            system += (
-                "Если правишь React — сохрани существующие импорты и поведение, "
-                "кроме запрошенного."
-            )
 
-        raw = self.llm.chat(
-            [
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Запрос: {request}\n\n"
-                        + (f"Контекст изучения:\n{context[:8000]}\n\n" if context else "")
-                        + (
-                            "Текущие файлы для правки:\n"
-                            + "\n\n".join(focus_blobs)
-                            + "\n\n"
-                            if focus_blobs
-                            else ""
-                        )
-                        + "Доступные файлы:\n"
-                        + "\n".join(tree[:120])
-                    ),
-                },
-            ]
+        user_content = f"Запрос: {request}\n\n"
+        if context:
+            user_content += f"Контекст изучения:\n{context[:4000]}\n\n"
+        if focus_blobs:
+            user_content += (
+                "Текущие файлы (прави через edits old→new):\n"
+                + "\n\n".join(focus_blobs)
+                + "\n\n"
+            )
+        user_content += (
+            "Другие доступные пути (не читай все — только если нужно):\n"
+            + "\n".join(tree[:40])
         )
-        data = _extract_json(raw) or {"files": []}
-        files = []
-        for item in data.get("files", []):
-            rel = str(item.get("path", "")).replace("\\", "/").lstrip("/")
-            content = item.get("content")
-            if not rel or content is None:
-                continue
-            if Path(rel).name.lower() in BLOCKED_NAMES:
-                continue
-            abs_path = (base / rel).resolve()
-            if not self._is_allowed(abs_path):
-                continue
-            try:
-                store_rel = abs_path.relative_to(base).as_posix()
-            except ValueError:
-                continue
-            bad = self._frontend_style_problems(store_rel, str(content))
-            if bad:
-                raise RuntimeError(
-                    "Патч отклонён: в JSX нельзя так стилизовать (нативный CSS). "
-                    + bad
-                    + " Переформулируй запрос или попроси снова: стили только через sx={{…}}."
+
+        last_error = ""
+        files: list[dict[str, str]] = []
+        for _attempt in range(2):
+            prompt = user_content
+            if last_error:
+                prompt = (
+                    user_content
+                    + "\n\nПРЕДЫДУЩИЙ ПАТЧ ОТКЛОНЁН:\n"
+                    + last_error
+                    + "\nВерни новый JSON. old должен точно совпадать с файлом."
                 )
-            files.append({"path": store_rel, "content": content})
+            # один user-turn: два подряд role=user у части моделей Ollama → HTTP 400
+            messages: list[dict[str, str]] = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ]
+            try:
+                raw = self.llm.chat(
+                    messages,
+                    temperature=0.15,
+                    max_tokens=2048,
+                )
+            except TypeError:
+                raw = self.llm.chat(messages)
+            try:
+                files = materialize_patch(
+                    {},
+                    raw=raw,
+                    extract_json=_extract_json,
+                    base=base,
+                    originals=originals,
+                    blocked_names=BLOCKED_NAMES,
+                    is_allowed=self._is_allowed,
+                    style_check=self._frontend_style_problems,
+                )
+                last_error = ""
+                break
+            except RuntimeError as exc:
+                last_error = str(exc)
+                files = []
         if not files:
             raise RuntimeError(
-                "Не удалось сформировать безопасный патч. Уточни, какой файл править."
+                last_error
+                or "Не удалось сформировать безопасный патч. Уточни файл и что менять."
             )
+
         patch_id = (
             datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
             + "-"
@@ -466,6 +484,7 @@ class HardEvolve:
             "self_edit": bool(self_edit or root is None),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending_approval",
+            "mode": "edits",
         }
         self.pending_path.write_text(
             json.dumps(pending, ensure_ascii=False, indent=2), encoding="utf-8"

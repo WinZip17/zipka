@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import SettingsIcon from "@mui/icons-material/Settings";
@@ -18,8 +18,11 @@ import IconButton from "@mui/material/IconButton";
 import InputLabel from "@mui/material/InputLabel";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
+import Slider from "@mui/material/Slider";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import {
@@ -31,6 +34,7 @@ import {
   resetInfo,
   resetLearning,
   sendChat,
+  setCompute,
   type StatusResponse,
 } from "../api";
 
@@ -140,6 +144,42 @@ export function SidePanel({
   const [mode, setMode] = useState("auto");
   const [edits, setEdits] = useState(false);
   const [learnQ, setLearnQ] = useState("");
+  const [computeMode, setComputeMode] = useState<"cpu" | "gpu" | "hybrid">("cpu");
+  const [gpuLayers, setGpuLayers] = useState(24);
+  const [computeBusy, setComputeBusy] = useState(false);
+  const [computeMsg, setComputeMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const c = status?.compute;
+    if (!c) return;
+    const m = (c.mode || "cpu") as "cpu" | "gpu" | "hybrid";
+    if (m === "cpu" || m === "gpu" || m === "hybrid") setComputeMode(m);
+    if (typeof c.gpu_layers === "number") setGpuLayers(c.gpu_layers);
+  }, [status?.compute]);
+
+  const applyCompute = async () => {
+    setComputeBusy(true);
+    setComputeMsg(null);
+    try {
+      const data = await setCompute(
+        computeMode,
+        computeMode === "hybrid" ? gpuLayers : null,
+      );
+      const note = data.compute?.note;
+      setComputeMsg(
+        `Режим: ${data.compute?.mode || computeMode}` +
+          (data.compute?.resolved_n_gpu_layers !== undefined
+            ? ` (слоёв GPU: ${data.compute.resolved_n_gpu_layers})`
+            : "") +
+          (note ? `\n${note}` : ""),
+      );
+      onRefresh();
+    } catch (err) {
+      setComputeMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setComputeBusy(false);
+    }
+  };
 
   const withBusy = async (hint: string, fn: () => Promise<void>) => {
     if (busy) return;
@@ -754,6 +794,68 @@ export function SidePanel({
           Настройки
         </DialogTitle>
         <DialogContent>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
+            Модель: CPU / GPU
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
+            Можно использовать оба сразу (hybrid): часть слоёв на видеокарте, остальное на
+            процессоре. GPU требует CUDA-сборку llama-cpp-python (не CPU-колесо).
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            size="small"
+            value={computeMode}
+            onChange={(_e, v) => {
+              if (v) setComputeMode(v);
+            }}
+            sx={{ mb: 1.5 }}
+          >
+            <ToggleButton value="cpu">CPU</ToggleButton>
+            <ToggleButton value="gpu">GPU</ToggleButton>
+            <ToggleButton value="hybrid">Hybrid</ToggleButton>
+          </ToggleButtonGroup>
+          {computeMode === "hybrid" && (
+            <Box sx={{ px: 0.5, mb: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">
+                Слоёв на GPU: {gpuLayers}
+              </Typography>
+              <Slider
+                size="small"
+                min={1}
+                max={64}
+                value={gpuLayers}
+                onChange={(_e, v) => setGpuLayers(Array.isArray(v) ? v[0] : v)}
+                valueLabelDisplay="auto"
+              />
+            </Box>
+          )}
+          {status?.compute?.note && (
+            <Alert severity={status.compute.llama_gpu_offload ? "success" : "info"} sx={{ mb: 1.5 }}>
+              {status.compute.note}
+            </Alert>
+          )}
+          {computeMsg && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+            >
+              {computeMsg}
+            </Typography>
+          )}
+          <Button
+            fullWidth
+            variant="contained"
+            disabled={busy || computeBusy}
+            onClick={() => void applyCompute()}
+            sx={{ mb: 2.5 }}
+          >
+            {computeBusy ? "Применяю…" : "Применить compute"}
+          </Button>
+
+          <Divider sx={{ mb: 2 }} />
+
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
             Данные
           </Typography>

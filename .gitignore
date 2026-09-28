@@ -40,6 +40,7 @@ data/persona/persona.yaml
 data/models/*.gguf
 data/models/**/*.gguf
 !data/models/README.md
+data/settings/
 
 # any accidental local dumps
 *.jsonl

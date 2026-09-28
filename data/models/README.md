@@ -1,7 +1,9 @@
 # Сюда положи файл модели в формате GGUF, например:
-#   data/models/qwen2.5-7b-instruct-q4_k_m.gguf
+#   data/models/Qwen3-8B-Q4_K_M.gguf
 #
-# Затем: pip install llama-cpp-python
-# и перезапусти Зипку (ZIPKA_LLM_BACKEND=auto по умолчанию подхватит .gguf).
+# На Windows ставь готовое колесо (иначе pip падает на длинных путях):
+#   pip install llama-cpp-python --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 #
-# Каталог Hugging Face с GGUF: https://huggingface.co/models?library=gguf
+# Перезапусти Зипку (ZIPKA_LLM_BACKEND=auto подхватит *.gguf).
+#
+# Каталог Hugging Face: https://huggingface.co/models?library=gguf

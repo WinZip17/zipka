@@ -92,6 +92,7 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
             bgcolor: "#0f1613",
             border: 1,
             borderColor: "divider",
+            borderRadius: 1.5,
           }}
         >
           <InputBase
@@ -122,10 +123,10 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
           color="primary"
           disabled={disabled || (!stagedFile && !text.trim())}
           sx={{
-            bgcolor: "primary.main",
-            color: "primary.contrastText",
+            bgcolor: "#007BFF",
+            color: "#fff",
             borderRadius: 2.5,
-            "&:hover": { bgcolor: "primary.main", filter: "brightness(1.05)" },
+            "&:hover": { bgcolor: "#0056b3" },
             "&.Mui-disabled": { bgcolor: "#24332c", color: "text.secondary" },
           }}
         >

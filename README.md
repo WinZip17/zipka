@@ -19,7 +19,7 @@
 ```bash
 .\.venv\Scripts\activate
 pip install -r requirements.txt
-pip install llama-cpp-python
+pip install llama-cpp-python --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 copy .env.example .env
 
 # положи *.gguf в data/models (например qwen2.5-7b-instruct-q4_k_m.gguf)
@@ -30,7 +30,7 @@ python -m zipka.main web
 ```
 
 Каталог моделей: https://huggingface.co/models?library=gguf  
-Опционально в `.env`: `ZIPKA_GGUF_MODEL=имя_файла.gguf`, `ZIPKA_GGUF_CTX=4096`, `ZIPKA_GGUF_GPU_LAYERS=0`.
+Опционально в `.env`: `ZIPKA_GGUF_MODEL=имя_файла.gguf`, `ZIPKA_GGUF_CTX=8192`, `ZIPKA_GGUF_GPU_LAYERS=0`.
 
 ### Вариант B — системная Ollama
 

@@ -17,6 +17,8 @@ class LlmClient(Protocol):
         model: str | None = None,
         stream: bool = False,
         images: list[str] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str: ...
 
     def summarize(self, text: str, *, instruction: str) -> str: ...

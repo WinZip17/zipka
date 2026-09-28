@@ -55,6 +55,16 @@ export type UserProfileSummary = {
   speaker?: SpeakerGuardSummary;
 };
 
+export type ComputeSettings = {
+  mode?: "cpu" | "gpu" | "hybrid" | string;
+  gpu_layers?: number;
+  resolved_n_gpu_layers?: number;
+  hybrid_possible?: boolean;
+  llama_gpu_offload?: boolean;
+  nvidia_detected?: boolean;
+  note?: string;
+};
+
 export type StatusResponse = {
   ollama: boolean;
   llm?: LlmBackendInfo;
@@ -67,6 +77,7 @@ export type StatusResponse = {
   limits?: StatusLimits;
   approve_phrase?: string;
   user?: UserProfileSummary;
+  compute?: ComputeSettings;
   proactive?: {
     today?: string;
     used?: number;
@@ -207,6 +218,27 @@ export async function resetLearning(confirm_phrase: string) {
   });
   const data = await parseJson<{ message?: string; detail?: string }>(res);
   if (!res.ok) throw new Error(data.detail || "Сброс не выполнен");
+  return data;
+}
+
+export async function setCompute(mode: string, gpu_layers?: number | null) {
+  const res = await fetch("/api/settings/compute", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mode,
+      gpu_layers: gpu_layers ?? undefined,
+    }),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    compute?: ComputeSettings;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(typeof detail === "string" ? detail : "Не удалось сменить compute");
+  }
   return data;
 }
 

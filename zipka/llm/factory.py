@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
-from zipka.llm.gguf_client import GgufClient, resolve_gguf_path
+from zipka.llm.gguf_client import GgufClient, probe_llama_cpp, resolve_gguf_path
 from zipka.llm.ollama_client import OllamaClient
 
 
@@ -25,35 +25,38 @@ def create_llm_client(settings: Settings | None = None):
                 f"Режим gguf, но в {models_dir} нет .gguf файлов. "
                 "Положи модель (*.gguf) и перезапусти Зипку."
             )
+        ok, err = probe_llama_cpp()
+        if not ok:
+            raise LlmError(err or "GGUF недоступен.")
         return GgufClient(settings, gguf)
 
-    # auto: предпочесть локальный файл, иначе Ollama
+    # auto: GGUF только если библиотека реально грузится
     if gguf is not None:
-        try:
-            client = GgufClient(settings, gguf)
-            if client.is_available():
-                return client
-        except LlmError:
-            pass
-        # файл есть, но нет llama-cpp-python — сообщим при первом chat;
-        # пока пробуем Ollama, а status покажет подсказку
-        try:
-            import llama_cpp  # noqa: F401
-        except ImportError:
-            # вернём gguf-клиент всё равно — is_available=False, chat даст понятную ошибку
-            return GgufClient(settings, gguf)
+        ok, _err = probe_llama_cpp()
+        if ok:
+            try:
+                client = GgufClient(settings, gguf)
+                if client.is_available():
+                    return client
+            except LlmError:
+                pass
+        # иначе тихо уходим на Ollama (статус/чат подскажут при нужде)
 
     return OllamaClient(settings)
 
 
 def describe_backend(client) -> dict:
     if isinstance(client, GgufClient):
-        return {
+        ok = client.is_available()
+        info = {
             "backend": "gguf",
             "model": client.model_name,
             "model_path": str(client.model_path),
-            "available": client.is_available(),
+            "available": ok,
         }
+        if not ok:
+            info["error"] = client.load_error()
+        return info
     return {
         "backend": "ollama",
         "model": getattr(client, "settings", get_settings()).ollama_model,

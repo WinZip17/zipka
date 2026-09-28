@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     # auto | gguf | ollama — auto берёт .gguf из data/models, иначе Ollama
     zipka_llm_backend: str = "auto"
     zipka_gguf_model: str = ""  # имя файла в data/models, пусто = новейший .gguf
-    zipka_gguf_ctx: int = 4096
-    zipka_gguf_max_tokens: int = 2048
+    zipka_gguf_ctx: int = 8192
+    zipka_gguf_max_tokens: int = 1024
     zipka_gguf_gpu_layers: int = 0  # >0 если собрали llama-cpp с GPU
     zipka_gguf_threads: int = 0  # 0 = авто
     zipka_data_dir: str = "data"
@@ -76,6 +76,7 @@ def ensure_data_dirs(settings: Settings | None = None) -> Path:
         "patches",
         "mind",
         "models",
+        "settings",
     ):
         (base / sub).mkdir(parents=True, exist_ok=True)
     return base
