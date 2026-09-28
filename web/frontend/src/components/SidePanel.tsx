@@ -43,6 +43,8 @@ type Props = {
   archiveMember: string;
   onArchiveMember: (value: string) => void;
   onBubble: (text: string, who: "user" | "bot") => void;
+  onThinking: (hint: string | null) => void;
+  onBusy: (busy: boolean) => void;
   onRefresh: () => void;
   onResetChat: () => void;
   onStageFile: (file: File) => void;
@@ -124,6 +126,8 @@ export function SidePanel({
   archiveMember,
   onArchiveMember,
   onBubble,
+  onThinking,
+  onBusy,
   onRefresh,
   onResetChat,
   onStageFile,
@@ -136,6 +140,18 @@ export function SidePanel({
   const [mode, setMode] = useState("auto");
   const [edits, setEdits] = useState(false);
   const [learnQ, setLearnQ] = useState("");
+
+  const withBusy = async (hint: string, fn: () => Promise<void>) => {
+    if (busy) return;
+    onBusy(true);
+    onThinking(hint);
+    try {
+      await fn();
+    } finally {
+      onThinking(null);
+      onBusy(false);
+    }
+  };
 
   const sensorBtnSx = (active: boolean) => ({
     color: active ? "primary.contrastText" : "text.primary",
@@ -159,22 +175,26 @@ export function SidePanel({
   };
 
   const eyeCapture = async (action: string) => {
-    const data = await eyesAction(action);
-    if (data.description) onBubble(data.description, "bot");
-    else if (data.detail) onBubble(data.detail, "bot");
-    else if (data.message) onBubble(data.message, "bot");
-    if (data.comment) onBubble(data.comment, "bot");
-    onRefresh();
+    await withBusy("Смотрю…", async () => {
+      const data = await eyesAction(action);
+      if (data.description) onBubble(data.description, "bot");
+      else if (data.detail) onBubble(data.detail, "bot");
+      else if (data.message) onBubble(data.message, "bot");
+      if (data.comment) onBubble(data.comment, "bot");
+      onRefresh();
+    });
   };
 
   const earListen = async () => {
-    const data = await earsAction("listen");
-    if (data.heard) onBubble(`(уши) ${data.heard}`, "user");
-    if (data.comment) onBubble(data.comment, "bot");
-    if (data.reply) onBubble(data.reply, "bot");
-    else if (data.detail) onBubble(data.detail, "bot");
-    else if (data.message) onBubble(data.message, "bot");
-    onRefresh();
+    await withBusy("Слушаю…", async () => {
+      const data = await earsAction("listen");
+      if (data.heard) onBubble(`(уши) ${data.heard}`, "user");
+      if (data.comment) onBubble(data.comment, "bot");
+      if (data.reply) onBubble(data.reply, "bot");
+      else if (data.detail) onBubble(data.detail, "bot");
+      else if (data.message) onBubble(data.message, "bot");
+      onRefresh();
+    });
   };
 
   const onStudy = async (e: FormEvent) => {
@@ -186,34 +206,40 @@ export function SidePanel({
     if (comment.trim()) message += ` комментарий: ${comment.trim()}`;
     if (edits) message += ` предложи правки`;
     onBubble(message, "user");
-    try {
-      const data = await sendChat(message);
-      onBubble(data.reply || "(пустой ответ)", "bot");
-      onRefresh();
-    } catch (err) {
-      onBubble(err instanceof Error ? err.message : String(err), "bot");
-    }
+    await withBusy("Изучаю…", async () => {
+      try {
+        const data = await sendChat(message);
+        onBubble(data.reply || "(пустой ответ)", "bot");
+        onRefresh();
+      } catch (err) {
+        onBubble(err instanceof Error ? err.message : String(err), "bot");
+      }
+    });
   };
 
   const onLearn = async (e: FormEvent) => {
     e.preventDefault();
     if (!learnQ.trim()) return;
-    const data = await learn(learnQ.trim());
-    onBubble(data.summary || JSON.stringify(data), "bot");
-    setLearnQ("");
-    onRefresh();
+    await withBusy("Учусь…", async () => {
+      const data = await learn(learnQ.trim());
+      onBubble(data.summary || JSON.stringify(data), "bot");
+      setLearnQ("");
+      onRefresh();
+    });
   };
 
   const onApprove = async () => {
-    try {
-      const data = await approvePatch();
-      let msg = `Патч применён: ${data.id}`;
-      if (data.frontend_rebuild) msg += `\nСборка UI: ${data.frontend_rebuild}`;
-      onBubble(msg, "bot");
-    } catch (err) {
-      onBubble(err instanceof Error ? err.message : "Нет патча", "bot");
-    }
-    onRefresh();
+    await withBusy("Применяю…", async () => {
+      try {
+        const data = await approvePatch();
+        let msg = `Патч применён: ${data.id}`;
+        if (data.frontend_rebuild) msg += `\nСборка UI: ${data.frontend_rebuild}`;
+        onBubble(msg, "bot");
+      } catch (err) {
+        onBubble(err instanceof Error ? err.message : "Нет патча", "bot");
+      }
+      onRefresh();
+    });
   };
 
   const onReset = async () => {
@@ -412,7 +438,7 @@ export function SidePanel({
         fullWidth
         color="warning"
         variant="contained"
-        disabled={busy}
+        disabled={busy || !pending}
         onClick={() => void onApprove()}
         sx={{ mt: 1 }}
       >

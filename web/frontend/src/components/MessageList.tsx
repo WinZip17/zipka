@@ -16,6 +16,7 @@ type Props = {
   hasMore: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
+  thinking?: string | null;
 };
 
 function formatMessageTime(iso?: string | null): string {
@@ -45,7 +46,13 @@ function formatMessageTime(iso?: string | null): string {
   return `${date} ${time}`;
 }
 
-export function MessageList({ messages, hasMore, loadingOlder, onLoadOlder }: Props) {
+export function MessageList({
+  messages,
+  hasMore,
+  loadingOlder,
+  onLoadOlder,
+  thinking,
+}: Props) {
   const logRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickBottom = useRef(true);
@@ -59,7 +66,7 @@ export function MessageList({ messages, hasMore, loadingOlder, onLoadOlder }: Pr
     if (stickBottom.current) {
       bottomRef.current?.scrollIntoView({ behavior: "auto" });
     }
-  }, [messages]);
+  }, [messages, thinking]);
 
   return (
     <Box
@@ -133,8 +140,56 @@ export function MessageList({ messages, hasMore, loadingOlder, onLoadOlder }: Pr
           </Box>
         );
       })}
+      {thinking && (
+        <Box
+          sx={{
+            maxWidth: "85%",
+            alignSelf: "flex-start",
+            px: 1.5,
+            py: 1.25,
+            borderRadius: 3.5,
+            bgcolor: "#1b2730",
+            border: 1,
+            borderColor: "divider",
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+          }}
+        >
+          <Box
+            sx={{
+              display: "flex",
+              gap: 0.5,
+              "& span": {
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                bgcolor: "primary.main",
+                animation: "zipkaPulse 1.2s ease-in-out infinite",
+              },
+              "& span:nth-of-type(2)": { animationDelay: "0.2s" },
+              "& span:nth-of-type(3)": { animationDelay: "0.4s" },
+              "@keyframes zipkaPulse": {
+                "0%, 80%, 100%": { opacity: 0.25, transform: "scale(0.85)" },
+                "40%": { opacity: 1, transform: "scale(1)" },
+              },
+            }}
+          >
+            <span />
+            <span />
+            <span />
+          </Box>
+          <Typography
+            variant="body2"
+            sx={{ color: "text.secondary", fontStyle: "italic" }}
+          >
+            {thinking}
+          </Typography>
+        </Box>
+      )}
       <div ref={bottomRef} />
-      {!messages.length && (
+      {!messages.length && !thinking && (
         <Stack sx={{ py: 6, opacity: 0.7, alignItems: "center" }}>
           <Typography color="text.secondary">История пуста — напиши Зипке</Typography>
         </Stack>

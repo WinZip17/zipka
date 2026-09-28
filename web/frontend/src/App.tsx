@@ -32,6 +32,7 @@ export default function App() {
   const [stagedFile, setStagedFile] = useState<File | null>(null);
   const [archiveMember, setArchiveMember] = useState("");
   const [busy, setBusy] = useState(false);
+  const [thinking, setThinking] = useState<string | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [oldestIndex, setOldestIndex] = useState<number | null>(null);
@@ -157,7 +158,7 @@ export default function App() {
         setStagedFile(null);
         const label = message ? `${message}\n📎 ${file.name}` : `📎 ${file.name}`;
         addBubble(label, "user");
-        addBubble("Читаю вложение…", "bot");
+        setThinking("Читаю…");
         try {
           const data = await uploadBook(
             file,
@@ -172,6 +173,7 @@ export default function App() {
         return;
       }
       addBubble(message, "user");
+      setThinking("Вникаю…");
       try {
         const data = await sendChat(message);
         addBubble(data.reply || "(пустой ответ)", "bot");
@@ -180,6 +182,7 @@ export default function App() {
         addBubble(err instanceof Error ? err.message : String(err), "bot");
       }
     } finally {
+      setThinking(null);
       setBusy(false);
     }
   };
@@ -266,6 +269,7 @@ export default function App() {
             hasMore={hasMore}
             loadingOlder={loadingOlder}
             onLoadOlder={() => void loadOlderHistory()}
+            thinking={thinking}
           />
           <Composer
             disabled={busy}
@@ -293,6 +297,8 @@ export default function App() {
             archiveMember={archiveMember}
             onArchiveMember={setArchiveMember}
             onBubble={addBubble}
+            onThinking={setThinking}
+            onBusy={setBusy}
             onRefresh={() => void refreshStatus()}
             onResetChat={() => {
               setMessages([]);
