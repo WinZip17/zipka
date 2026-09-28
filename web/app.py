@@ -162,7 +162,10 @@ def api_eyes(body: ActionIn) -> dict:
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    desc = agent.describe_image(snap["image_b64"])
+    try:
+        desc = agent.describe_image(snap["image_b64"])
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
     agent.memory.add_note(
         "eyes",
         desc,

@@ -307,11 +307,11 @@ def models_download(
     model_id: str = typer.Option(
         "all",
         "--id",
-        help="pathfinder | qwen25 | all",
+        help="pathfinder | qwen25 | moondream2 | vision | all",
     ),
     force: bool = typer.Option(False, "--force", help="Перекачать"),
 ) -> None:
-    """Скачать Pathfinder и/или Qwen2.5-7B в data/models."""
+    """Скачать GGUF (чат и/или vision Moondream2)."""
     from zipka.tools.download_chat_models import main as dl_main
 
     args = ["--id", model_id]

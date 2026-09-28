@@ -125,6 +125,16 @@ export type StatusResponse = {
   llm?: LlmBackendInfo;
   model: string;
   vision_model?: string;
+  vision?: {
+    available?: boolean;
+    backend?: string | null;
+    filename?: string | null;
+    mmproj?: string | null;
+    handler?: string | null;
+    label?: string | null;
+    path?: string | null;
+    download_hint?: string | null;
+  };
   eyes: boolean;
   ears: boolean;
   pending_patch?: boolean;

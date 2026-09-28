@@ -74,9 +74,15 @@ Web: http://127.0.0.1:8765
 
 Разработка UI: в одном терминале `python -m zipka.main web`, в другом `cd web/frontend && npm run dev` (Vite на :5173, API проксируется).
 
-**Приоритет (`ZIPKA_LLM_BACKEND=auto`):** если в `data/models` есть `*.gguf` → локальный llama.cpp; иначе Ollama. Глаза/vision пока только через Ollama.
+**Приоритет (`ZIPKA_LLM_BACKEND=auto`):** если в `data/models` есть `*.gguf` → локальный llama.cpp; иначе Ollama.
 
-При разных GGUF на чат и кодинг в VRAM держится одна роль: перед кодингом выгружается чат и наоборот (одна модель на обе роли — без выгрузки).
+**Глаза без Ollama:** нужен vision GGUF + `mmproj` (рекомендуется Moondream2 ≈3.5 GB):
+
+```bash
+python -m zipka.main models download --id moondream2
+```
+
+При снимке чатовая модель выгружается, кадр описывает vision, затем чат снова прогревается. Запасной путь — Ollama с `OLLAMA_VISION_MODEL`.
 
 ## Запуск ярлыком
 

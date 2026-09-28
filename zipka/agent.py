@@ -18,6 +18,7 @@ from zipka.llm.base import LlmError
 from zipka.llm.chat_models import models_status, resolve_role_gguf
 from zipka.llm.factory import LlmRouter, create_llm_client, describe_backend
 from zipka.llm.ollama_client import OllamaError
+from zipka.llm.vision import VisionGgufClient, vision_status
 from zipka.memory.store import MemoryStore
 from zipka.memory.user_profile import UserProfiler
 from zipka.mind.goals import PseudoMind
@@ -104,6 +105,7 @@ class Zipka:
         )
         self.net = NetLearner(self.llm, self.memory, self.settings)
         self.safety = SafetyPolicy()
+        self.vision = VisionGgufClient(self.settings)
         self.uploads_dir = self.settings.data_dir / "books" / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self._reset_pending = False
@@ -136,6 +138,8 @@ class Zipka:
             self.llm, self.memory, self.mind, self.settings
         )
         self.net = NetLearner(self.llm, self.memory, self.settings)
+        self.safety = SafetyPolicy()
+        self.vision = VisionGgufClient(self.settings)
         self.uploads_dir = self.settings.data_dir / "books" / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self._reset_pending = False
@@ -167,7 +171,11 @@ class Zipka:
             "llm": backend_info,
             "models": file_names,
             "model": model_name,
-            "vision_model": self.settings.vision_model,
+            "vision_model": (
+                (vision_status(self.settings).get("filename"))
+                or self.settings.vision_model
+            ),
+            "vision": vision_status(self.settings),
             "eyes": self.eyes.enabled,
             "ears": self.ears.enabled,
             "pending_patch": self.hard.has_pending(),
@@ -843,12 +851,60 @@ class Zipka:
         return self.proactive.sensor_comment(modality="ears", content=heard)
 
     def describe_image(self, image_b64: str, prompt: str = "Что ты видишь?") -> str:
-        messages = self.build_messages(prompt)
-        return self.llm.chat(
-            messages,
-            model=self.settings.vision_model,
-            images=[image_b64],
+        """Описать кадр: локальный vision-GGUF → Ollama → понятная ошибка."""
+        prompt = (prompt or "Что ты видишь?").strip() or "Что ты видишь?"
+        vs = vision_status(self.settings)
+        local_err: str | None = None
+
+        if vs.get("available"):
+            if hasattr(self.llm, "unload"):
+                try:
+                    self.llm.unload()
+                except Exception:
+                    pass
+            try:
+                return self.vision.describe(image_b64, prompt=prompt)
+            except Exception as exc:
+                local_err = str(exc)
+            finally:
+                try:
+                    self.vision.unload()
+                except Exception:
+                    pass
+                self._after_code_role()
+
+        ollama_ok = False
+        try:
+            from zipka.llm.ollama_client import OllamaClient
+
+            ollama_ok = OllamaClient(self.settings).is_available()
+        except Exception:
+            ollama_ok = False
+        if ollama_ok:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты глаза Зипки. Опиши изображение кратко по-русски."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+            return self.llm.chat(
+                messages,
+                model=self.settings.vision_model,
+                images=[image_b64],
+            )
+
+        hint = (
+            "Чтобы видеть без Ollama, положи vision GGUF + mmproj в data/models "
+            "(удобно Moondream2):\n"
+            "  python -m zipka.main models download --id moondream2\n"
+            "Либо запусти Ollama с vision-моделью и укажи OLLAMA_VISION_MODEL."
         )
+        if local_err:
+            raise LlmError(f"Локальный vision: {local_err}\n{hint}")
+        raise LlmError(hint)
 
     def _remember_turn(self, user_text: str, reply: str) -> None:
         self.memory.add_chat("user", user_text)

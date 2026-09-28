@@ -830,7 +830,12 @@ export function SidePanel({
               <InfoLine label="Vision" value={status?.vision_model || status?.model || "—"} />
             ) : (
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-                Vision/глаза в GGUF-режиме пока через Ollama
+                Vision:{" "}
+                {status?.vision?.available
+                  ? `${status.vision.label || status.vision.filename} (локальный GGUF)`
+                  : status?.vision?.download_hint
+                    ? `нет — ${status.vision.download_hint}`
+                    : "нет локального mmproj; запасной путь — Ollama"}
               </Typography>
             )}
             {Array.isArray(models) && models.length > 0 && (

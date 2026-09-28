@@ -80,6 +80,12 @@ def list_gguf_catalog(settings: Settings | None = None) -> list[dict[str, Any]]:
     models_dir = settings.data_dir / "models"
     out: list[dict[str, Any]] = []
     for p in find_gguf_files(models_dir):
+        # mmproj / чистый vision text не предлагаем как чат/кодинг
+        low = p.name.lower()
+        if "mmproj" in low:
+            continue
+        if "moondream" in low and "text-model" in low:
+            continue
         hint = _hint_for(p.name)
         try:
             size = p.stat().st_size

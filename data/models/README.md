@@ -42,3 +42,18 @@ python -m zipka.main models use pathfinder
 - Runtime: `chat_gguf` / `code_gguf` в `data/settings/runtime.json`
 
 Compute (CPU / GPU / hybrid): настройки UI. Для Pathfinder на 8GB VRAM удобнее **hybrid** или одна модель на обе роли.
+
+## Vision (глаза без Ollama)
+
+Нужна пара файлов: text GGUF + `*mmproj*.gguf`.
+
+```bat
+python -m zipka.main models download --id moondream2
+```
+
+Файлы (~3.5 GB суммарно):
+
+- `moondream2-text-model-f16_ct-vicuna.gguf`
+- `moondream2-mmproj-f16-20250414.gguf`
+
+Любая другая LLaVA/MiniCPM-V пара с mmproj в этой папке тоже подхватится автоматически.
