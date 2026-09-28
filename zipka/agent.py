@@ -630,6 +630,19 @@ class Zipka:
                     f" (книги={result.get('book_count', 0)}, "
                     f"код={result.get('code_count', 0)}).\n"
                 )
+            strategy = result.get("study_strategy")
+            strategy_line = ""
+            if strategy == "ai_context":
+                pc = result.get("priority_counts") or {}
+                strategy_line = (
+                    "Стратегия: AI-контекст "
+                    f"(ai={pc.get('ai', 0)}, manifests={pc.get('manifest', 0)}, "
+                    f"docs={pc.get('docs', 0)}, agent_dirs={pc.get('agent', 0)}).\n"
+                )
+            elif strategy == "rest":
+                strategy_line = (
+                    "Стратегия: AI-контекста нет — смотрела прочие исходники.\n"
+                )
             comment_line = f"С учётом комментария: {comment}\n" if comment else ""
             digest_preview = (result.get("overview") or result.get("digest") or "")[
                 :1200
@@ -637,6 +650,7 @@ class Zipka:
             reply = (
                 f"{verb}{inner}: `{path}`\n"
                 f"{comment_line}"
+                f"{strategy_line}"
                 f"{files_line}"
                 f"Фрагментов: {result['chunks']}. "
                 f"Выжимка: `{result['digest_path']}`\n\n"

@@ -91,7 +91,9 @@ CODE_SUFFIXES = {
 }
 
 ARCHIVE_SUFFIXES = {".zip", ".rar"}
-READABLE_SUFFIXES = BOOK_SUFFIXES | CODE_SUFFIXES
+# .mdc — правила Cursor; без расширения — ниже по имени файла
+EXTRA_CONTEXT_SUFFIXES = {".mdc", ".mdx"}
+READABLE_SUFFIXES = BOOK_SUFFIXES | CODE_SUFFIXES | EXTRA_CONTEXT_SUFFIXES
 
 SKIP_DIR_NAMES = {
     ".git",
@@ -113,6 +115,94 @@ SKIP_DIR_NAMES = {
     ".vscode",
     "vendor",
     "coverage",
+}
+
+# --- Приоритеты изучения чужих проектов (AI-контекст) ---
+# 0: явные AI-файлы, 1: манифесты проекта, 2: документация, 3: папки агентов
+AI_CONTEXT_FILENAMES = {
+    "agents.md",
+    "agent.md",
+    "project_map.md",
+    "projectmap.md",
+    "claude.md",
+    "gemini.md",
+    "llms.txt",
+    "llm.md",
+    ".cursorrules",
+    "cursorrules",
+    "copilot-instructions.md",
+    "code_of_conduct.md",
+}
+
+PROJECT_MANIFEST_FILENAMES = {
+    "package.json",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "pipfile",
+    "cargo.toml",
+    "go.mod",
+    "composer.json",
+    "gemfile",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "cmakelists.txt",
+    "makefile",
+    "dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "tsconfig.json",
+    "jsconfig.json",
+    "cargo.lock",
+    "poetry.lock",
+}
+
+DOC_FILENAMES = {
+    "readme.md",
+    "readme.txt",
+    "readme.rst",
+    "readme",
+    "contributing.md",
+    "changelog.md",
+    "changes.md",
+    "architecture.md",
+    "design.md",
+    "overview.md",
+    "getting-started.md",
+    "getting_started.md",
+    "docs.md",
+    "documentation.md",
+    "guide.md",
+    "handbook.md",
+    "api.md",
+    "security.md",
+}
+
+DOC_DIR_NAMES = {"docs", "doc", "documentation", "wiki", "guides"}
+
+AI_AGENT_DIR_NAMES = {
+    ".cursor",
+    ".claude",
+    ".codex",
+    ".continue",
+    ".windsurf",
+    ".aider",
+    "agents",
+}
+
+# Имена без расширения / особые, которые всё равно читаем
+EXTENSIONLESS_READABLE = {
+    "makefile",
+    "dockerfile",
+    "gemfile",
+    "pipfile",
+    "procfile",
+    "cmakelists.txt",
+    ".cursorrules",
+    "cursorrules",
+    "agents.md",  # already has suffix but listed for clarity
 }
 
 MAX_CODE_BYTES = 1_500_000
@@ -194,7 +284,9 @@ class BookReader:
         comment: str | None = None,
         mode: str | None = None,
     ) -> dict:
-        files = self._collect_readable_files(directory, mode=mode)[:max_files]
+        collected = self._collect_readable_files(directory, mode=mode)
+        files = collected["files"][:max_files]
+        strategy = collected["strategy"]
         if not files:
             raise RuntimeError(
                 f"В `{directory}` нет читаемых файлов "
@@ -229,18 +321,22 @@ class BookReader:
 
         digest = "\n\n".join(digests)
         overview = ""
+        strategy_hint = {
+            "ai_context": (
+                "изучение по AI-приоритетам: agents/manifests, документация, "
+                "папки агентов (.cursor/rules и т.п.)"
+            ),
+            "rest": "AI-контекста не нашлось — обзор прочих исходников/книг",
+            "books": "режим книг",
+        }.get(strategy, strategy)
         try:
             overview = self.llm.summarize(
                 digest[:14000],
                 instruction=(
                     f"Сделай обзор папки «{directory.name}» ({folder_kind}): "
-                    f"книг={book_n}, кода={code_n}. Структура, назначение, "
-                    "главные темы/модули, на что обратить внимание."
-                    + (
-                        f" Фокус пользователя: {comment}"
-                        if comment
-                        else ""
-                    )
+                    f"книг={book_n}, кода={code_n}. Стратегия: {strategy_hint}. "
+                    "Структура, назначение, главные темы/модули, на что обратить внимание."
+                    + (f" Фокус пользователя: {comment}" if comment else "")
                 ),
             )
         except Exception:
@@ -250,8 +346,17 @@ class BookReader:
         header = (
             f"# Изучение папки: {directory}\n\n"
             f"Тип: {folder_kind}\n"
+            f"Стратегия: {strategy} ({strategy_hint})\n"
             f"Файлов: {len(files)} (книги={book_n}, код={code_n})\n"
         )
+        if collected.get("priority_counts"):
+            pc = collected["priority_counts"]
+            header += (
+                "Приоритеты: "
+                f"ai={pc.get('ai', 0)}, manifests={pc.get('manifest', 0)}, "
+                f"docs={pc.get('docs', 0)}, agent_dirs={pc.get('agent', 0)}, "
+                f"rest={pc.get('rest', 0)}\n"
+            )
         if comment:
             header += f"\nКомментарий пользователя: {comment}\n"
         if overview:
@@ -268,6 +373,8 @@ class BookReader:
                 "files": [str(f) for f in files],
                 "comment": comment,
                 "folder_kind": folder_kind,
+                "study_strategy": strategy,
+                "priority_counts": collected.get("priority_counts"),
             },
         )
         return {
@@ -283,6 +390,8 @@ class BookReader:
             "book_count": book_n,
             "code_count": code_n,
             "is_project": folder_kind in {"folder_code", "folder_mixed"},
+            "study_strategy": strategy,
+            "priority_counts": collected.get("priority_counts"),
         }
 
     def _summarize_file(
@@ -453,10 +562,15 @@ class BookReader:
     @staticmethod
     def _kind_for(path: Path) -> str:
         suffix = path.suffix.lower()
+        name = path.name.lower()
         if suffix in CODE_SUFFIXES:
             return "code"
+        if suffix in EXTRA_CONTEXT_SUFFIXES:
+            return "book"
         if suffix in BOOK_SUFFIXES:
             return "book"
+        if name in EXTENSIONLESS_READABLE or name in PROJECT_MANIFEST_FILENAMES:
+            return "code"
         return "book"
 
     @staticmethod
@@ -487,59 +601,161 @@ class BookReader:
             f"{focus}"
         )
 
+    def _is_readable_path(self, path: Path, *, allowed: set[str]) -> bool:
+        name = path.name.lower()
+        suffix = path.suffix.lower()
+        if name in EXTENSIONLESS_READABLE or name in PROJECT_MANIFEST_FILENAMES:
+            return True
+        if name in AI_CONTEXT_FILENAMES:
+            return True
+        if suffix in allowed:
+            return True
+        return False
+
+    def _priority_bucket(self, path: Path, root: Path) -> str:
+        """ai | manifest | docs | agent | rest"""
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            rel = path
+        parts_lower = {p.lower() for p in rel.parts[:-1]}
+        name = path.name.lower()
+
+        if name in AI_CONTEXT_FILENAMES:
+            return "ai"
+        # rules/skills внутри .cursor и т.п. тоже AI-контекст
+        if parts_lower & AI_AGENT_DIR_NAMES:
+            if name.endswith((".md", ".mdc", ".mdx", ".txt", ".yml", ".yaml", ".json")):
+                return "agent"
+            if "rules" in parts_lower or "skills" in parts_lower or "agents" in parts_lower:
+                return "agent"
+
+        if name in PROJECT_MANIFEST_FILENAMES:
+            return "manifest"
+        # корневые/верхнеуровневые lock не критичны — манифест важнее
+        if name in {"package-lock.json", "pnpm-lock.yaml", "yarn.lock"} and len(rel.parts) <= 2:
+            return "manifest"
+
+        if name in DOC_FILENAMES or name.startswith("readme"):
+            top = rel.parts[0].lower() if rel.parts else ""
+            # runtime/cache README не считаем документацией проекта
+            if top in {"data", "tmp", "temp", "cache", "logs", "vendor", "dist", "build"}:
+                return "rest"
+            if "docs" not in parts_lower and "doc" not in parts_lower:
+                if len(rel.parts) > 2:
+                    return "rest"
+            return "docs"
+        if parts_lower & DOC_DIR_NAMES and path.suffix.lower() in (
+            BOOK_SUFFIXES | {".rst", ".txt", ".mdc", ".mdx"}
+        ):
+            return "docs"
+
+        return "rest"
+
     def _collect_readable_files(
         self, root: Path, *, mode: str | None = None
-    ) -> list[Path]:
+    ) -> dict[str, Any]:
         mode = (mode or "auto").lower()
         if mode == "books":
-            allowed = BOOK_SUFFIXES
+            allowed = BOOK_SUFFIXES | EXTRA_CONTEXT_SUFFIXES
         elif mode == "code":
-            allowed = CODE_SUFFIXES
+            allowed = CODE_SUFFIXES | EXTRA_CONTEXT_SUFFIXES | BOOK_SUFFIXES
         else:
             allowed = READABLE_SUFFIXES
 
         found: list[Path] = []
-        for path in sorted(root.rglob("*")):
+        for path in root.rglob("*"):
             if not path.is_file():
                 continue
-            if any(part in SKIP_DIR_NAMES for part in path.parts):
+            # .cursor / .claude не пропускаем — это AI-контекст
+            skip_parts = [
+                p
+                for p in path.parts
+                if p in SKIP_DIR_NAMES and p.lower() not in AI_AGENT_DIR_NAMES
+            ]
+            if skip_parts:
                 continue
-            if path.suffix.lower() not in allowed:
+            if not self._is_readable_path(path, allowed=allowed):
                 continue
             try:
                 size = path.stat().st_size
                 limit = (
                     MAX_BOOK_BYTES
                     if path.suffix.lower() in BOOK_SUFFIXES
+                    or path.suffix.lower() in EXTRA_CONTEXT_SUFFIXES
                     else MAX_CODE_BYTES
                 )
-                if size > limit:
+                if size > limit or size <= 0:
                     continue
             except OSError:
                 continue
             found.append(path)
 
-        def rank(p: Path) -> tuple:
-            name = p.name.lower()
-            boost = 0
-            if name in {
-                "main.py",
-                "app.py",
-                "index.ts",
-                "index.js",
-                "main.ts",
-                "main.go",
-                "readme.md",
-            }:
-                boost = -10
-            if p.suffix.lower() in CODE_SUFFIXES:
-                boost -= 1
-            return (boost, len(p.parts), str(p).lower())
+        if mode == "books":
+            ranked = sorted(
+                found,
+                key=lambda p: (len(p.parts), str(p).lower()),
+            )
+            return {
+                "files": ranked,
+                "strategy": "books",
+                "priority_counts": {"rest": len(ranked)},
+            }
 
-        return sorted(found, key=rank)
+        buckets: dict[str, list[Path]] = {
+            "ai": [],
+            "manifest": [],
+            "docs": [],
+            "agent": [],
+            "rest": [],
+        }
+        for path in found:
+            buckets[self._priority_bucket(path, root)].append(path)
+
+        def _sort_key(p: Path) -> tuple:
+            try:
+                depth = len(p.relative_to(root).parts)
+            except ValueError:
+                depth = len(p.parts)
+            return (depth, str(p).lower())
+
+        for key in buckets:
+            buckets[key].sort(key=_sort_key)
+
+        priority = (
+            buckets["ai"]
+            + buckets["manifest"][:10]
+            + buckets["docs"][:10]
+            + buckets["agent"][:10]
+        )
+        # без дублей, порядок сохранён
+        seen: set[Path] = set()
+        deduped: list[Path] = []
+        for p in priority:
+            rp = p.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            deduped.append(p)
+        priority = deduped
+        counts = {k: len(v) for k, v in buckets.items()}
+
+        # Есть AI/docs/manifests/agent-контекст — опираемся на него;
+        # «остальное» только если приоритетных файлов нет.
+        if priority:
+            return {
+                "files": priority,
+                "strategy": "ai_context",
+                "priority_counts": counts,
+            }
+        return {
+            "files": buckets["rest"],
+            "strategy": "rest",
+            "priority_counts": counts,
+        }
 
     def _collect_source_files(self, root: Path) -> list[Path]:
-        return self._collect_readable_files(root, mode="code")
+        return list(self._collect_readable_files(root, mode="code")["files"])
 
     def _extract_book(
         self, archive: Path, *, member: str | None = None
