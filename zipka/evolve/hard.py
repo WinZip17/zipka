@@ -61,19 +61,21 @@ FRONTEND_EDIT_RULES = """
 """.strip()
 
 PATCH_SYSTEM = """
-Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON без markdown.
+Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON без markdown и без пояснений.
 
-Формат (точечные правки):
-{\"files\":[{\"path\":\"relative/path.ext\",\"edits\":[{\"old\":\"точный уникальный фрагмент ИЗ ФАЙЛА\",\"new\":\"замена\"}]}]}
+Формат (точечные правки существующего файла):
+{"files":[{"path":"relative/path.ext","edits":[{"old":"точный уникальный фрагмент ИЗ ФАЙЛА","new":"замена"}]}]}
 
 Для НОВОГО файла:
-{\"files\":[{\"path\":\"relative/path.ext\",\"content\":\"полный текст\"}]}
+{"files":[{"path":"relative/path.ext","content":"полный текст"}]}
 
 Правила:
 - old копируй 1:1 из текущего файла (включая отступы), встречается ровно 1 раз.
-- Обычно 1 файл и 1–3 edits. Не дублируй весь файл в content, если файл уже есть.
+- Обычно 1–2 файла и 1–5 edits. Не дублируй весь файл в content, если файл уже есть.
+- Большую фичу делай МИНИМАЛЬНЫМ шагом: заготовка/хук/вызов, не весь пайплайн целиком.
 - Не трогай .env, secrets, node_modules, dist.
 - Синтаксис должен остаться валидным (скобки, кавычки, JSX).
+- Если не можешь сделать правку — верни {"files":[]} (но лучше маленький рабочий шаг).
 """.strip()
 
 
@@ -361,7 +363,7 @@ class HardEvolve:
 
         base = root or ROOT_DIR
         tree = self._list_editable_files(prefer_root=root)
-        focus_files = self._pick_focus_files(request, tree, limit=2)
+        focus_files = self._pick_focus_files(request, tree, limit=3)
         originals: dict[str, str] = {}
         focus_blobs: list[str] = []
         for rel in focus_files:
@@ -420,13 +422,22 @@ class HardEvolve:
                 + "\n\n".join(focus_blobs)
                 + "\n\n"
             )
+        else:
+            user_content += (
+                "Фокус-файлы не подставились — выбери путь из списка ниже "
+                "и сделай минимальный edit/новый файл.\n\n"
+            )
         user_content += (
+            "Сделай ОДИН минимальный рабочий шаг под запрос "
+            "(например хук вызова / заготовка модуля), не весь продукт сразу.\n"
+            "Ответ — только JSON.\n\n"
             "Другие доступные пути (не читай все — только если нужно):\n"
             + "\n".join(tree[:40])
         )
 
         last_error = ""
         files: list[dict[str, str]] = []
+        raw_last = ""
         for _attempt in range(2):
             prompt = user_content
             if last_error:
@@ -434,9 +445,9 @@ class HardEvolve:
                     user_content
                     + "\n\nПРЕДЫДУЩИЙ ПАТЧ ОТКЛОНЁН:\n"
                     + last_error
-                    + "\nВерни новый JSON. old должен точно совпадать с файлом."
+                    + "\nВерни новый JSON. old должен точно совпадать с файлом. "
+                    "Без markdown, без текста вокруг JSON."
                 )
-            # один user-turn: два подряд role=user у части моделей Ollama → HTTP 400
             messages: list[dict[str, str]] = [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -445,10 +456,11 @@ class HardEvolve:
                 raw = self.llm.chat(
                     messages,
                     temperature=0.15,
-                    max_tokens=2048,
+                    max_tokens=3072,
                 )
             except TypeError:
                 raw = self.llm.chat(messages)
+            raw_last = raw or ""
             try:
                 files = materialize_patch(
                     {},
@@ -466,10 +478,15 @@ class HardEvolve:
                 last_error = str(exc)
                 files = []
         if not files:
-            raise RuntimeError(
-                last_error
-                or "Не удалось сформировать безопасный патч. Уточни файл и что менять."
-            )
+            tip = last_error or "Не удалось сформировать безопасный патч."
+            preview = re.sub(r"\s+", " ", raw_last).strip()[:280]
+            if preview and "files[].edits" in tip:
+                tip += (
+                    f"\nМодель ответила не JSON-патчем (начало: «{preview}»). "
+                    "Уточни файл и маленький шаг: например "
+                    "«в zipka/sensors/eyes.py добавь функцию detect_faces»."
+                )
+            raise RuntimeError(tip)
 
         patch_id = (
             datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -692,28 +709,90 @@ class HardEvolve:
             ("интерфейс", 15),
             ("sidepanel", 30),
             ("app.tsx", 20),
-            ("agent.py", 15),
+            ("agent.py", 25),
+            ("eyes", 55),
+            ("камер", 50),
+            ("глаз", 50),
+            ("vision", 55),
+            ("moondream", 40),
+            ("лиц", 45),
+            ("face", 45),
+            ("кадр", 40),
+            ("сним", 35),
+            ("распозна", 40),
+            ("самообуч", 30),
+            ("профил", 25),
+            ("user_profile", 35),
             ("style", 10),
             ("frontend", 10),
             ("theme", 25),
         ]
+        path_boosts = [
+            (("камер", "глаз", "лиц", "face", "кадр", "сним", "vision", "распозна"), (
+                ("sensors/eyes.py", 80),
+                ("llm/vision.py", 75),
+                ("agent.py", 55),
+                ("memory/user_profile.py", 35),
+                ("mind/proactive.py", 25),
+            )),
+            (("самообуч", "soft-evolve", "soft evolve", "характер", "навык"), (
+                ("evolve/soft.py", 60),
+                ("agent.py", 50),
+                ("character/persona.py", 40),
+                ("mind/goals.py", 35),
+            )),
+            (("чат", "сообщен", "кнопк", "цвет", "ui", "интерфейс", "composer"), (
+                ("web/frontend/src/components/Composer.tsx", 70),
+                ("web/frontend/src/components/MessageList.tsx", 45),
+                ("web/frontend/src/App.tsx", 40),
+                ("web/frontend/src/theme.ts", 30),
+            )),
+        ]
         for rel in tree:
             score = 0
-            name = rel.lower()
+            name = rel.lower().replace("\\", "/")
             for hint, w in hints:
                 if hint in lowered and hint in name:
                     score += w
+            for keys, boosts in path_boosts:
+                if any(k in lowered for k in keys):
+                    for needle, w in boosts:
+                        if needle in name:
+                            score += w
+            # Composer не получает бонус «просто за имя», иначе UI крадёт любой запрос
             if "composer" in name and any(
-                k in lowered for k in ("кнопк", "отправ", "цвет", "чат", "сообщен", "ui")
+                k in lowered
+                for k in (
+                    "кнопк",
+                    "отправ",
+                    "цвет",
+                    "чат",
+                    "сообщен",
+                    "ui",
+                    "интерфейс",
+                    "composer",
+                    "textarea",
+                    "поле ввода",
+                )
             ):
                 score += 40
-            if "composer" in name:
-                score += 10
             if score:
                 scored.append((score, rel))
         scored.sort(key=lambda x: (-x[0], x[1]))
         picked = [rel for _, rel in scored[:limit]]
+
+        # добор по домену, если эвристика пустая/слабая
+        domain_defaults: list[str] = []
         if any(
+            k in lowered
+            for k in ("камер", "глаз", "лиц", "face", "кадр", "сним", "vision", "распозна")
+        ):
+            domain_defaults = [
+                "zipka/sensors/eyes.py",
+                "zipka/llm/vision.py",
+                "zipka/agent.py",
+            ]
+        elif any(
             k in lowered
             for k in (
                 "textarea",
@@ -730,13 +809,37 @@ class HardEvolve:
                 "чат",
             )
         ):
-            cand = "web/frontend/src/components/Composer.tsx"
+            domain_defaults = [
+                "web/frontend/src/components/Composer.tsx",
+                "web/frontend/src/theme.ts",
+            ]
+        elif any(k in lowered for k in ("свой код", "самообуч", "зипк", "добавь в код")):
+            domain_defaults = ["zipka/agent.py"]
+
+        for cand in domain_defaults:
             if cand in tree and cand not in picked:
-                picked.insert(0, cand)
-            theme = "web/frontend/src/theme.ts"
-            if theme in tree and theme not in picked:
-                picked.append(theme)
-        return picked[:limit]
+                picked.append(cand)
+            # tree может хранить с другим разделителем
+            alt = cand.replace("/", "\\")
+            if alt in tree and cand not in picked and alt not in picked:
+                picked.append(alt)
+
+        # нормализуем к путям из tree
+        normalized: list[str] = []
+        tree_map = {t.replace("\\", "/"): t for t in tree}
+        for rel in picked:
+            key = rel.replace("\\", "/")
+            if key in tree_map and tree_map[key] not in normalized:
+                normalized.append(tree_map[key])
+        if not normalized and tree:
+            # последний шанс: agent.py / main module
+            for fallback in ("zipka/agent.py", "zipka/main.py"):
+                if fallback in tree_map:
+                    normalized.append(tree_map[fallback])
+                    break
+            if not normalized:
+                normalized = tree[:1]
+        return normalized[:limit]
 
     def _frontend_style_problems(self, rel: str, content: str) -> str | None:
         """Поймать типичный «нативный CSS» в JSX/TSX патчах."""
