@@ -162,6 +162,20 @@ export function SidePanel({
       borderColor: active ? "primary.main" : "divider",
       filter: active ? "brightness(1.05)" : undefined,
     },
+    // busy/disabled не должен съедать индикатор «сенсор включён»
+    "&.Mui-disabled": active
+      ? {
+          color: "primary.contrastText",
+          borderColor: "primary.main",
+          bgcolor: "primary.main",
+          opacity: 0.9,
+        }
+      : {
+          color: "text.disabled",
+          borderColor: "divider",
+          bgcolor: "#1a2420",
+          opacity: 0.65,
+        },
   });
 
   const toggleEyes = async () => {
