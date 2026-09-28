@@ -11,7 +11,7 @@ from zipka.agent import Zipka
 from zipka.evolve.hard import APPROVE_PHRASE
 from zipka.reset import CONFIRM_PHRASE
 from zipka.runtime_settings import compute_status
-from zipka.llm.chat_models import chat_models_status
+from zipka.llm.chat_models import models_status
 from zipka.system_limits import format_bytes, max_book_bytes
 
 ROOT = Path(__file__).resolve().parent
@@ -51,7 +51,16 @@ class ComputeIn(BaseModel):
 
 
 class ChatModelIn(BaseModel):
-    model_id: str = Field(description="pathfinder | qwen25")
+    model_id: str | None = Field(
+        default=None, description="legacy: filename или pathfinder|qwen25"
+    )
+    chat_gguf: str | None = None
+    code_gguf: str | None = None
+
+
+class ModelsIn(BaseModel):
+    chat_gguf: str | None = None
+    code_gguf: str | None = None
 
 
 def _spa_index() -> Path:
@@ -86,17 +95,36 @@ def api_set_compute(body: ComputeIn) -> dict:
 
 @app.get("/api/settings/chat-model")
 def api_get_chat_model() -> dict:
-    return chat_models_status()
+    return models_status()
 
 
 @app.post("/api/settings/chat-model")
 def api_set_chat_model(body: ChatModelIn) -> dict:
     try:
-        return agent.set_chat_model(body.model_id)
+        if body.chat_gguf or body.code_gguf:
+            return agent.set_models(chat_gguf=body.chat_gguf, code_gguf=body.code_gguf)
+        if body.model_id:
+            return agent.set_models(chat_gguf=body.model_id)
+        raise ValueError("Укажи chat_gguf / code_gguf или model_id")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(400, f"Не удалось сменить модель чата: {exc}") from exc
+        raise HTTPException(400, f"Не удалось сменить модель: {exc}") from exc
+
+
+@app.get("/api/settings/models")
+def api_get_models() -> dict:
+    return models_status()
+
+
+@app.post("/api/settings/models")
+def api_set_models(body: ModelsIn) -> dict:
+    try:
+        return agent.set_models(chat_gguf=body.chat_gguf, code_gguf=body.code_gguf)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось сменить модели: {exc}") from exc
 
 
 @app.post("/api/chat")

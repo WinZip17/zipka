@@ -34,8 +34,8 @@ import {
   resetInfo,
   resetLearning,
   sendChat,
-  setChatModel,
   setCompute,
+  setModels,
   type StatusResponse,
 } from "../api";
 
@@ -149,9 +149,10 @@ export function SidePanel({
   const [gpuLayers, setGpuLayers] = useState(24);
   const [computeBusy, setComputeBusy] = useState(false);
   const [computeMsg, setComputeMsg] = useState<string | null>(null);
-  const [chatModelId, setChatModelId] = useState("pathfinder");
-  const [chatModelBusy, setChatModelBusy] = useState(false);
-  const [chatModelMsg, setChatModelMsg] = useState<string | null>(null);
+  const [chatGguf, setChatGguf] = useState("");
+  const [codeGguf, setCodeGguf] = useState("");
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsMsg, setModelsMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const c = status?.compute;
@@ -162,9 +163,18 @@ export function SidePanel({
   }, [status?.compute]);
 
   useEffect(() => {
-    const id = status?.chat_models?.active_id;
-    if (id) setChatModelId(id);
-  }, [status?.chat_models?.active_id]);
+    const roles = status?.chat_models || status?.model_roles;
+    const chat = roles?.chat?.filename || roles?.active_id || roles?.defaults?.chat;
+    const code = roles?.code?.filename || roles?.defaults?.code;
+    if (chat) setChatGguf(chat);
+    if (code) setCodeGguf(code);
+  }, [
+    status?.chat_models?.chat?.filename,
+    status?.chat_models?.code?.filename,
+    status?.chat_models?.active_id,
+    status?.model_roles?.chat?.filename,
+    status?.model_roles?.code?.filename,
+  ]);
 
   const applyCompute = async () => {
     setComputeBusy(true);
@@ -190,21 +200,28 @@ export function SidePanel({
     }
   };
 
-  const applyChatModel = async () => {
-    setChatModelBusy(true);
-    setChatModelMsg(null);
+  const applyModels = async () => {
+    setModelsBusy(true);
+    setModelsMsg(null);
     try {
-      const data = await setChatModel(chatModelId);
-      const label =
-        data.chat_models?.active_label ||
-        data.llm?.chat_model_label ||
-        chatModelId;
-      setChatModelMsg(`Активна: ${label}`);
+      const data = await setModels({
+        chat_gguf: chatGguf || undefined,
+        code_gguf: codeGguf || undefined,
+      });
+      const roles = data.chat_models || data.models;
+      const chatLabel = roles?.chat?.label || chatGguf;
+      const codeLabel = roles?.code?.label || codeGguf;
+      const same = roles?.same_model || chatGguf === codeGguf;
+      setModelsMsg(
+        same
+          ? `Одна модель на чат и кодинг: ${chatLabel}`
+          : `Чат: ${chatLabel}\nКодинг: ${codeLabel}`,
+      );
       onRefresh();
     } catch (err) {
-      setChatModelMsg(err instanceof Error ? err.message : String(err));
+      setModelsMsg(err instanceof Error ? err.message : String(err));
     } finally {
-      setChatModelBusy(false);
+      setModelsBusy(false);
     }
   };
 
@@ -769,29 +786,43 @@ export function SidePanel({
               }
             />
             <InfoLine
-              label="Профиль чата"
+              label="Чат"
               value={
+                status?.chat_models?.chat?.label ||
                 status?.chat_models?.active_label ||
-                status?.llm?.chat_model_label ||
-                status?.chat_models?.active_id ||
+                status?.chat_models?.chat?.filename ||
+                status?.model ||
                 "—"
               }
             />
-            <InfoLine label="Чат" value={status?.model || "—"} />
-            {llmBackend === "gguf" && status?.llm?.model_path ? (
-              <InfoLine label="Файл" value={status.llm.model_path} />
+            <InfoLine
+              label="Кодинг"
+              value={
+                status?.chat_models?.code?.label ||
+                status?.chat_models?.code?.filename ||
+                "—"
+              }
+            />
+            {status?.chat_models?.same_model ? (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mt: 0.5 }}
+              >
+                Одна GGUF на обе роли (экономия VRAM)
+              </Typography>
             ) : null}
-            {(status?.chat_models?.profiles || []).length > 0 ? (
+            {llmBackend === "gguf" && status?.llm?.model_path ? (
+              <InfoLine label="Файл чата" value={status.llm.model_path} />
+            ) : null}
+            {(status?.chat_models?.files || []).length > 0 ? (
               <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{ display: "block", mt: 0.75 }}
               >
-                {(status?.chat_models?.profiles || [])
-                  .map(
-                    (p) =>
-                      `${p.present ? "✓" : "·"} ${p.label}${p.active ? " ←" : ""}`,
-                  )
+                {(status?.chat_models?.files || [])
+                  .map((f) => `✓ ${f.label || f.filename}`)
                   .join(" · ")}
               </Typography>
             ) : null}
@@ -802,7 +833,7 @@ export function SidePanel({
                 Vision/глаза в GGUF-режиме пока через Ollama
               </Typography>
             )}
-            {models.length > 0 && (
+            {Array.isArray(models) && models.length > 0 && (
               <Typography
                 variant="caption"
                 color="text.secondary"
@@ -862,7 +893,7 @@ export function SidePanel({
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         fullWidth
-        maxWidth="xs"
+        maxWidth="sm"
         slotProps={{ paper: { sx: dialogPaperSx } }}
       >
         <DialogTitle sx={{ fontFamily: '"Manrope", sans-serif', fontWeight: 700 }}>
@@ -870,49 +901,84 @@ export function SidePanel({
         </DialogTitle>
         <DialogContent>
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
-            Модель чата
+            Модели GGUF
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
-            Pathfinder — личность. Qwen2.5 — запасной чат / инструкции. Скачай GGUF в{" "}
-            <code>data/models</code>, затем переключи здесь.
+            По умолчанию: чат — Pathfinder, кодинг — Qwen2.5. Можно выбрать любую из{" "}
+            <code>data/models</code> для каждой роли или одну и ту же на обе.
           </Typography>
           <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
-            <InputLabel id="chat-model-label">Профиль</InputLabel>
+            <InputLabel id="chat-gguf-label">Модель чата</InputLabel>
             <Select
-              labelId="chat-model-label"
-              label="Профиль"
-              value={chatModelId}
-              onChange={(e) => setChatModelId(String(e.target.value))}
+              labelId="chat-gguf-label"
+              label="Модель чата"
+              value={chatGguf}
+              onChange={(e) => setChatGguf(String(e.target.value))}
             >
-              {(status?.chat_models?.profiles || [
-                { id: "pathfinder", label: "Pathfinder RP 12B RU", present: false },
-                { id: "qwen25", label: "Qwen2.5-7B-Instruct Q5_K_M", present: false },
-              ]).map((p) => (
-                <MenuItem key={p.id} value={p.id} disabled={p.present === false}>
-                  {p.present === false ? "· " : "✓ "}
-                  {p.label}
-                  {p.blurb ? ` — ${p.blurb}` : ""}
+              {(
+                status?.chat_models?.files ||
+                (status?.chat_models?.profiles || []).map((p) => ({
+                  filename: p.filename || p.id,
+                  label: p.label,
+                  blurb: p.blurb,
+                }))
+              ).map((f) => (
+                <MenuItem key={`chat-${f.filename}`} value={f.filename}>
+                  {f.label || f.filename}
+                  {f.blurb ? ` — ${f.blurb}` : ""}
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
-          {chatModelMsg && (
+          <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
+            <InputLabel id="code-gguf-label">Модель кодинга</InputLabel>
+            <Select
+              labelId="code-gguf-label"
+              label="Модель кодинга"
+              value={codeGguf}
+              onChange={(e) => setCodeGguf(String(e.target.value))}
+            >
+              {(
+                status?.chat_models?.files ||
+                (status?.chat_models?.profiles || []).map((p) => ({
+                  filename: p.filename || p.id,
+                  label: p.label,
+                  blurb: p.blurb,
+                }))
+              ).map((f) => (
+                <MenuItem key={`code-${f.filename}`} value={f.filename}>
+                  {f.label || f.filename}
+                  {f.blurb ? ` — ${f.blurb}` : ""}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          {chatGguf && codeGguf && chatGguf === codeGguf ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", mb: 1 }}
+            >
+              Одна модель на чат и кодинг — второй экземпляр в VRAM не грузится.
+            </Typography>
+          ) : null}
+          {modelsMsg && (
             <Typography
               variant="caption"
               color="text.secondary"
               sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
             >
-              {chatModelMsg}
+              {modelsMsg}
             </Typography>
           )}
           <Button
             fullWidth
             variant="contained"
-            disabled={busy || chatModelBusy}
-            onClick={() => void applyChatModel()}
+            disabled={busy || modelsBusy || !chatGguf || !codeGguf}
+            onClick={() => void applyModels()}
             sx={{ mb: 2.5 }}
           >
-            {chatModelBusy ? "Гружу модель…" : "Применить модель чата"}
+            {modelsBusy ? "Гружу модели…" : "Применить модели"}
           </Button>
 
           <Divider sx={{ mb: 2 }} />

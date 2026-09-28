@@ -38,6 +38,22 @@ export type ChatModelProfile = {
   active?: boolean;
 };
 
+export type ModelRoleBlock = {
+  filename?: string;
+  label?: string;
+  present?: boolean;
+  path?: string | null;
+};
+
+export type GgufFileInfo = {
+  filename: string;
+  path?: string;
+  size_bytes?: number;
+  size_gb?: number | null;
+  label?: string;
+  blurb?: string;
+};
+
 export type ChatModelsStatus = {
   active_id?: string;
   active_label?: string;
@@ -46,6 +62,11 @@ export type ChatModelsStatus = {
   models_dir?: string;
   profiles?: ChatModelProfile[];
   download_hint?: string;
+  files?: GgufFileInfo[];
+  chat?: ModelRoleBlock;
+  code?: ModelRoleBlock;
+  same_model?: boolean;
+  defaults?: { chat?: string; code?: string };
 };
 
 export type SpeakerGuardSummary = {
@@ -113,6 +134,7 @@ export type StatusResponse = {
   user?: UserProfileSummary;
   compute?: ComputeSettings;
   chat_models?: ChatModelsStatus;
+  model_roles?: ChatModelsStatus;
   proactive?: {
     today?: string;
     used?: number;
@@ -286,6 +308,7 @@ export async function setChatModel(model_id: string) {
   const data = await parseJson<{
     ok?: boolean;
     chat_models?: ChatModelsStatus;
+    models?: ChatModelsStatus;
     llm?: LlmBackendInfo;
     detail?: string;
   }>(res);
@@ -293,6 +316,34 @@ export async function setChatModel(model_id: string) {
     const detail = data.detail;
     throw new Error(
       typeof detail === "string" ? detail : "Не удалось сменить модель чата",
+    );
+  }
+  return data;
+}
+
+export async function setModels(opts: {
+  chat_gguf?: string | null;
+  code_gguf?: string | null;
+}) {
+  const res = await fetch("/api/settings/models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_gguf: opts.chat_gguf || undefined,
+      code_gguf: opts.code_gguf || undefined,
+    }),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    chat_models?: ChatModelsStatus;
+    models?: ChatModelsStatus;
+    llm?: LlmBackendInfo;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "Не удалось сменить модели",
     );
   }
   return data;

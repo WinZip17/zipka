@@ -14,8 +14,8 @@ from zipka.config import Settings, ensure_data_dirs, get_settings
 from zipka.evolve.hard import APPROVE_PHRASE, HardEvolve
 from zipka.evolve.soft import SoftEvolve
 from zipka.llm.base import LlmError
-from zipka.llm.chat_models import chat_models_status
-from zipka.llm.factory import create_llm_client, describe_backend
+from zipka.llm.chat_models import models_status, resolve_role_gguf
+from zipka.llm.factory import LlmRouter, create_llm_client, describe_backend
 from zipka.llm.ollama_client import OllamaError
 from zipka.memory.store import MemoryStore
 from zipka.memory.user_profile import UserProfiler
@@ -90,7 +90,7 @@ class Zipka:
         self.memory = MemoryStore(self.settings)
         self.persona = Persona(self.settings)
         self.soft = SoftEvolve(self.persona, self.memory, self.llm)
-        self.hard = HardEvolve(self.llm, self.memory, self.settings)
+        self.hard = HardEvolve(self._code_llm(), self.memory, self.settings)
         self.books = BookReader(self.llm, self.memory, self.settings)
         self.eyes = Eyes(self.settings)
         self.ears = Ears(self.settings)
@@ -107,6 +107,11 @@ class Zipka:
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self._reset_pending = False
 
+    def _code_llm(self) -> Any:
+        if isinstance(self.llm, LlmRouter):
+            return self.llm.code_llm
+        return self.llm
+
     def reload_runtime(self) -> None:
         """Пересоздать модули после очистки data/."""
         ensure_data_dirs(self.settings)
@@ -118,7 +123,7 @@ class Zipka:
         self.memory = MemoryStore(self.settings)
         self.persona = Persona(self.settings)
         self.soft = SoftEvolve(self.persona, self.memory, self.llm)
-        self.hard = HardEvolve(self.llm, self.memory, self.settings)
+        self.hard = HardEvolve(self._code_llm(), self.memory, self.settings)
         self.books = BookReader(self.llm, self.memory, self.settings)
         self.eyes = Eyes(self.settings)
         self.ears = Ears(self.settings)
@@ -153,11 +158,13 @@ class Zipka:
         book_limit = max_book_bytes()
         avail = available_ram_bytes()
         model_name = backend_info.get("model") or self.settings.ollama_model
+        roles = models_status(self.settings)
+        file_names = [f["filename"] for f in roles.get("files") or []] or models
         return {
             "name": "Зипка",
             "ollama": llm_ok if backend_info.get("backend") == "ollama" else False,
             "llm": backend_info,
-            "models": models,
+            "models": file_names,
             "model": model_name,
             "vision_model": self.settings.vision_model,
             "eyes": self.eyes.enabled,
@@ -177,7 +184,8 @@ class Zipka:
                 self.settings,
                 load_info=getattr(self.llm, "load_info", lambda: None)(),
             ),
-            "chat_models": chat_models_status(self.settings),
+            "chat_models": roles,
+            "model_roles": roles,
         }
 
     def _reload_llm(self) -> dict[str, Any]:
@@ -187,9 +195,9 @@ class Zipka:
             except Exception:
                 pass
         self.llm = create_llm_client(self.settings)
+        code = self._code_llm()
         for holder in (
             self.soft,
-            self.hard,
             self.books,
             self.mind,
             self.proactive,
@@ -198,9 +206,11 @@ class Zipka:
         ):
             if hasattr(holder, "llm"):
                 holder.llm = self.llm
+        self.hard.llm = code
         return {
             "llm": describe_backend(self.llm),
-            "chat_models": chat_models_status(self.settings),
+            "chat_models": models_status(self.settings),
+            "models": models_status(self.settings),
         }
 
     def set_compute(
@@ -225,20 +235,34 @@ class Zipka:
         }
 
     def set_chat_model(self, model_id: str) -> dict[str, Any]:
-        """Переключить чатовый GGUF-профиль (pathfinder | qwen25)."""
-        from zipka.llm.chat_models import CHAT_PROFILES, find_profile_file
+        """Переключить чатовую модель (filename или legacy id)."""
+        return self.set_models(chat_gguf=model_id)
 
-        mid = (model_id or "").strip().lower()
-        if mid not in CHAT_PROFILES:
-            raise ValueError("chat_model_id: pathfinder | qwen25")
-        profile = CHAT_PROFILES[mid]
-        models_dir = self.settings.data_dir / "models"
-        if find_profile_file(models_dir, profile) is None:
-            raise ValueError(
-                f"Файл «{profile['filename']}» не найден в {models_dir}. "
-                f"Скачай: python -m zipka.tools.download_chat_models --id {mid}"
-            )
-        save_runtime({"chat_model_id": mid}, self.settings)
+    def set_models(
+        self,
+        *,
+        chat_gguf: str | None = None,
+        code_gguf: str | None = None,
+    ) -> dict[str, Any]:
+        """Выбрать GGUF для чата и/или кодинга (можно одну и ту же)."""
+        patch: dict[str, Any] = {}
+        if chat_gguf:
+            name = Path(str(chat_gguf).strip()).name
+            if resolve_role_gguf("chat", self.settings, filename=name) is None:
+                raise ValueError(
+                    f"Файл «{name}» не найден в {self.settings.data_dir / 'models'}"
+                )
+            patch["chat_gguf"] = name
+        if code_gguf:
+            name = Path(str(code_gguf).strip()).name
+            if resolve_role_gguf("code", self.settings, filename=name) is None:
+                raise ValueError(
+                    f"Файл «{name}» не найден в {self.settings.data_dir / 'models'}"
+                )
+            patch["code_gguf"] = name
+        if not patch:
+            raise ValueError("Укажи chat_gguf и/или code_gguf")
+        save_runtime(patch, self.settings)
         reloaded = self._reload_llm()
         return {"ok": True, **reloaded}
 

@@ -13,7 +13,8 @@ ComputeMode = Literal["cpu", "gpu", "hybrid"]
 DEFAULT_RUNTIME: dict[str, Any] = {
     "compute_mode": "cpu",
     "gpu_layers": 16,
-    "chat_model_id": "pathfinder",
+    "chat_gguf": "Pathfinder-RP-12B-RU.Q4_K_M.gguf",
+    "code_gguf": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
 }
 
 
@@ -45,14 +46,24 @@ def load_runtime(settings: Settings | None = None) -> dict[str, Any]:
         out["gpu_layers"] = max(1, min(int(out.get("gpu_layers") or 16), 128))
     except (TypeError, ValueError):
         out["gpu_layers"] = 16
-    chat_id = str(out.get("chat_model_id") or "pathfinder").strip().lower()
-    if chat_id not in {"pathfinder", "qwen25"}:
-        chat_id = "pathfinder"
-    out["chat_model_id"] = chat_id
+
+    # миграция legacy chat_model_id → chat_gguf
+    from zipka.llm.chat_models import LEGACY_IDS, _normalize_name
+
+    if not str(out.get("chat_gguf") or "").strip():
+        legacy = str(out.get("chat_model_id") or "").strip()
+        if legacy:
+            out["chat_gguf"] = LEGACY_IDS.get(legacy.lower(), _normalize_name(legacy))
+    out["chat_gguf"] = _normalize_name(out.get("chat_gguf")) or DEFAULT_RUNTIME["chat_gguf"]
+    out["code_gguf"] = _normalize_name(out.get("code_gguf")) or DEFAULT_RUNTIME["code_gguf"]
+    # keep legacy field in sync for old readers
+    out["chat_model_id"] = out["chat_gguf"]
     return out
 
 
 def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
+    from zipka.llm.chat_models import LEGACY_IDS, _normalize_name
+
     current = load_runtime(settings)
     if "compute_mode" in patch and patch["compute_mode"] is not None:
         mode = str(patch["compute_mode"]).lower()
@@ -61,11 +72,18 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current["compute_mode"] = mode
     if "gpu_layers" in patch and patch["gpu_layers"] is not None:
         current["gpu_layers"] = max(1, min(int(patch["gpu_layers"]), 128))
+
+    if "chat_gguf" in patch and patch["chat_gguf"] is not None:
+        current["chat_gguf"] = _normalize_name(patch["chat_gguf"])
+    if "code_gguf" in patch and patch["code_gguf"] is not None:
+        current["code_gguf"] = _normalize_name(patch["code_gguf"])
+
+    # legacy API: chat_model_id как id или filename
     if "chat_model_id" in patch and patch["chat_model_id"] is not None:
-        chat_id = str(patch["chat_model_id"]).strip().lower()
-        if chat_id not in {"pathfinder", "qwen25"}:
-            raise ValueError("chat_model_id: pathfinder | qwen25")
-        current["chat_model_id"] = chat_id
+        raw = str(patch["chat_model_id"]).strip()
+        current["chat_gguf"] = LEGACY_IDS.get(raw.lower(), _normalize_name(raw))
+
+    current["chat_model_id"] = current["chat_gguf"]
     path = _runtime_path(settings)
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return current
@@ -80,7 +98,6 @@ def resolve_gpu_layers(settings: Settings | None = None) -> int:
         return 0
     if mode == "gpu":
         return -1
-    # hybrid: UI-заданое число, иначе .env
     env_layers = int(settings.zipka_gguf_gpu_layers or 0)
     if env_layers > 0 and not rt.get("gpu_layers"):
         return env_layers
