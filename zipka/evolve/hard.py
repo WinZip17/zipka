@@ -172,7 +172,7 @@ class HardEvolve:
         return any(k in lowered for k in keys)
 
     def wants_self_edit(self, text: str) -> bool:
-        """Правки самой Зипки (zipka/ + web/), а не внешнего last_project."""
+        """Явный запрос правок самой Зипки."""
         lowered = text.lower()
         keys = [
             "себе",
@@ -195,6 +195,76 @@ class HardEvolve:
             "frontend",
         ]
         return any(k in lowered for k in keys)
+
+    def wants_external_edit(self, text: str) -> bool:
+        """Явно указан внешний/изученный проект (не Зипка)."""
+        lowered = text.lower()
+        keys = [
+            "в этом проекте",
+            "в изученном проекте",
+            "в изученном",
+            "во внешнем проекте",
+            "во внешнем",
+            "в чужом проекте",
+            "по изученному проекту",
+            "по этому проекту",
+            "в last project",
+            "внешн",
+        ]
+        if any(k in lowered for k in keys):
+            return True
+        path = self._extract_dir_path(text)
+        if path is None:
+            return False
+        try:
+            path.resolve().relative_to(ROOT_DIR.resolve())
+            return False  # путь внутри Zipka → не внешний
+        except ValueError:
+            return True
+
+    def resolve_patch_target(self, text: str) -> tuple[bool, Path | None]:
+        """Куда править: (self_edit, project_root).
+
+        Без явного внешнего проекта всегда Зипка сама.
+        """
+        if self.wants_external_edit(text):
+            path = self._extract_dir_path(text)
+            if path and path.is_dir():
+                try:
+                    path.resolve().relative_to(ROOT_DIR.resolve())
+                except ValueError:
+                    return False, path
+            last = self.last_project()
+            if last:
+                try:
+                    last.resolve().relative_to(ROOT_DIR.resolve())
+                except ValueError:
+                    return False, last
+            # Просили внешний, но цели нет — не уходим в самоправку молча
+            raise RuntimeError(
+                "Нужен внешний проект: укажи путь к папке или сначала "
+                "«изучи папку …», потом «предложи правки в этом проекте»."
+            )
+        return True, None
+
+    def _extract_dir_path(self, text: str) -> Path | None:
+        """Вытащить путь к папке из текста, если есть."""
+        patterns = [
+            r'(?:[A-Za-z]:[\\/][^\s"\'«»]+)',
+            r'(?:\\\\[^\s"\'«»]+)',
+            r'(?:/(?:home|Users|var|opt|tmp)/[^\s"\'«»]+)',
+        ]
+        for pat in patterns:
+            for match in re.finditer(pat, text):
+                raw = match.group(0).rstrip(".,;:)")
+                # trim trailing Cyrillic glued words if any — stop at space already
+                try:
+                    p = Path(raw).expanduser()
+                    if p.exists() and p.is_dir():
+                        return p.resolve()
+                except OSError:
+                    continue
+        return None
 
     def is_approve(self, text: str) -> bool:
         return text.strip().lower() in APPROVE_PHRASES

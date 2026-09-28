@@ -242,8 +242,12 @@ class Zipka:
             return self.hard.format_pending()
 
         if self.hard.wants_code_change(text):
-            self_edit = self.hard.wants_self_edit(text)
-            project = None if self_edit else self.hard.last_project()
+            try:
+                self_edit, project = self.hard.resolve_patch_target(text)
+            except RuntimeError as exc:
+                reply = str(exc)
+                self._remember_turn(text, reply)
+                return reply
             ctx = None
             notes = self.memory.recent_notes(limit=5)
             if notes:
@@ -251,9 +255,9 @@ class Zipka:
             try:
                 pending = self.hard.propose(
                     text,
-                    project_root=project,
+                    project_root=None if self_edit else project,
                     context=ctx,
-                    self_edit=self_edit or project is None,
+                    self_edit=self_edit,
                 )
             except Exception as exc:
                 reply = f"Не смогла подготовить патч: {exc}"
