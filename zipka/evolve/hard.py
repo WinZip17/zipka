@@ -167,8 +167,59 @@ class HardEvolve:
             "textarea",
             "текстареа",
             "поле ввода",
+            "цвет кнопк",
+            "кнопку отправ",
+            "кнопка отправ",
+            "поменяй цвет",
+            "измени цвет",
+            "покрась",
+            "сделай синим",
+            "сделай красн",
+            "сделай зелён",
+            "сделай зелен",
         ]
-        return any(k in lowered for k in keys)
+        if any(k in lowered for k in keys):
+            return True
+        # «поменяй … кнопку/цвет/в чате …» без магической фразы
+        change_verbs = (
+            "поменяй",
+            "измени",
+            "сделай",
+            "покрась",
+            "замени",
+            "поставь",
+            "убери",
+            "добавь",
+            "сдвинь",
+            "увеличь",
+            "уменьши",
+            "переименуй",
+        )
+        ui_targets = (
+            "кнопк",
+            "цвет",
+            "интерфейс",
+            "в чате",
+            "ui",
+            "frontend",
+            "composer",
+            "отправк",
+            "textarea",
+            "поле ввода",
+            "стиль",
+            "фон",
+            "тема",
+            "mui",
+            "свой код",
+            "зипк",
+            "web/",
+            "layout",
+            "иконк",
+            "шрифт",
+        )
+        return any(v in lowered for v in change_verbs) and any(
+            t in lowered for t in ui_targets
+        )
 
     def wants_self_edit(self, text: str) -> bool:
         """Явный запрос правок самой Зипки."""
@@ -613,6 +664,9 @@ class HardEvolve:
         hints = [
             ("composer", 50),
             ("textarea", 40),
+            ("кнопк", 45),
+            ("отправ", 40),
+            ("цвет", 35),
             ("input", 20),
             ("чат", 25),
             ("сообщен", 25),
@@ -622,6 +676,7 @@ class HardEvolve:
             ("agent.py", 15),
             ("style", 10),
             ("frontend", 10),
+            ("theme", 25),
         ]
         for rel in tree:
             score = 0
@@ -629,6 +684,10 @@ class HardEvolve:
             for hint, w in hints:
                 if hint in lowered and hint in name:
                     score += w
+            if "composer" in name and any(
+                k in lowered for k in ("кнопк", "отправ", "цвет", "чат", "сообщен", "ui")
+            ):
+                score += 40
             if "composer" in name:
                 score += 10
             if score:
@@ -637,7 +696,20 @@ class HardEvolve:
         picked = [rel for _, rel in scored[:limit]]
         if any(
             k in lowered
-            for k in ("textarea", "текстареа", "поле ввода", "инпут", "input", "сообщен", "интерфейс", "ui", "кнопк")
+            for k in (
+                "textarea",
+                "текстареа",
+                "поле ввода",
+                "инпут",
+                "input",
+                "сообщен",
+                "интерфейс",
+                "ui",
+                "кнопк",
+                "цвет",
+                "отправ",
+                "чат",
+            )
         ):
             cand = "web/frontend/src/components/Composer.tsx"
             if cand in tree and cand not in picked:
@@ -662,6 +734,9 @@ class HardEvolve:
                 return None
 
         problems: list[str] = []
+        # типичная опечатка LLM в sx/объектах
+        if re.search(r"\b[A-Za-z_][\w]*\s*:=", content):
+            problems.append("найден := (нужно ':' в объектах или '=' в присваивании)")
         # HTML-style attribute
         if re.search(r"\bstyle\s*=\s*['\"][^'\"]*[;:][^'\"]*['\"]", content):
             problems.append("найден style=\"…\" со CSS-строкой")
