@@ -73,10 +73,13 @@ def api_chat_history(limit: int = 30, before: int | None = None) -> dict:
 @app.post("/api/eyes")
 def api_eyes(body: ActionIn) -> dict:
     action = body.action.lower()
-    if action == "on":
-        return {"ok": True, "message": agent.eyes.on()}
-    if action == "off":
-        return {"ok": True, "message": agent.eyes.off()}
+    try:
+        if action == "on":
+            return {"ok": True, "message": agent.eyes.on()}
+        if action == "off":
+            return {"ok": True, "message": agent.eyes.off()}
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     try:
         if action in {"snap", "camera", "cam"}:

@@ -6,6 +6,7 @@ from typing import Any, Iterator
 import httpx
 
 from zipka.config import Settings, get_settings
+from zipka.llm.base import LlmError
 
 
 @dataclass
@@ -14,7 +15,7 @@ class ChatMessage:
     content: str
 
 
-class OllamaError(RuntimeError):
+class OllamaError(LlmError):
     pass
 
 
@@ -22,6 +23,10 @@ class OllamaClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.base = self.settings.ollama_host.rstrip("/")
+
+    @property
+    def backend(self) -> str:
+        return "ollama"
 
     def is_available(self) -> bool:
         try:

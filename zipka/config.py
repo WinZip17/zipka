@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_model: str = "my_qwen:latest"
     ollama_vision_model: str = ""
+    # auto | gguf | ollama — auto берёт .gguf из data/models, иначе Ollama
+    zipka_llm_backend: str = "auto"
+    zipka_gguf_model: str = ""  # имя файла в data/models, пусто = новейший .gguf
+    zipka_gguf_ctx: int = 4096
+    zipka_gguf_max_tokens: int = 2048
+    zipka_gguf_gpu_layers: int = 0  # >0 если собрали llama-cpp с GPU
+    zipka_gguf_threads: int = 0  # 0 = авто
     zipka_data_dir: str = "data"
     zipka_reflect_every: int = 8
     zipka_net_allowlist: str = (
@@ -68,6 +75,7 @@ def ensure_data_dirs(settings: Settings | None = None) -> Path:
         "snapshots",
         "patches",
         "mind",
+        "models",
     ):
         (base / sub).mkdir(parents=True, exist_ok=True)
     return base

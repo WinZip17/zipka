@@ -17,8 +17,35 @@ export type StatusLimits = {
   ram_available_human?: string | null;
 };
 
+export type LlmBackendInfo = {
+  backend?: "gguf" | "ollama" | string;
+  model?: string;
+  model_path?: string;
+  host?: string;
+  available?: boolean;
+};
+
+export type UserProfileSummary = {
+  name?: string;
+  how_to_address?: string;
+  personality_type?: string;
+  character?: string[];
+  peculiarities?: string[];
+  mood?: string;
+  mood_previous?: string;
+  likes?: string[];
+  dislikes?: string[];
+  time_habits?: string[];
+  current_state?: string;
+  energy?: string;
+  facts_count?: number;
+  evidence_count?: number;
+  updated_at?: string;
+};
+
 export type StatusResponse = {
   ollama: boolean;
+  llm?: LlmBackendInfo;
   model: string;
   vision_model?: string;
   eyes: boolean;
@@ -27,6 +54,7 @@ export type StatusResponse = {
   models?: string[];
   limits?: StatusLimits;
   approve_phrase?: string;
+  user?: UserProfileSummary;
   proactive?: {
     today?: string;
     used?: number;
@@ -100,12 +128,22 @@ export async function eyesAction(action: string, monitor = 1) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, monitor }),
   });
-  return parseJson<{
+  const data = await parseJson<{
     description?: string;
     message?: string;
     comment?: string;
     detail?: string;
   }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    const msg = Array.isArray(detail)
+      ? detail.map((d) => (typeof d === "object" && d && "msg" in d ? String((d as { msg: unknown }).msg) : String(d))).join("; ")
+      : typeof detail === "string"
+        ? detail
+        : "Ошибка глаз";
+    throw new Error(msg);
+  }
+  return data;
 }
 
 export async function earsAction(action: string, seconds = 5) {

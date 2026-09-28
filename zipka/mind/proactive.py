@@ -7,7 +7,6 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from zipka.config import Settings, ensure_data_dirs, get_settings
-from zipka.llm.ollama_client import OllamaClient
 from zipka.memory.store import MemoryStore
 from zipka.mind.goals import PseudoMind
 
@@ -31,7 +30,7 @@ class ProactiveEngine:
 
     def __init__(
         self,
-        llm: OllamaClient,
+        llm: Any,
         memory: MemoryStore,
         mind: PseudoMind,
         settings: Settings | None = None,
@@ -161,6 +160,19 @@ class ProactiveEngine:
                 + "предложения, без официоза и без списка пунктов. "
                 + "Не начинай каждое предложение с имени. Не прощайся."
             )
+            try:
+                from zipka.memory.user_profile import UserProfiler
+                from zipka.memory.store import MemoryStore
+
+                profile = UserProfiler(MemoryStore(self.settings), self.llm, self.settings).load()
+                name = ((profile.get("identity") or {}).get("name") or "").strip()
+                mood = ((profile.get("mood") or {}).get("current") or "").strip()
+                if name:
+                    prompt += f" Собеседника зовут {name}."
+                if mood:
+                    prompt += f" Недавнее настроение: {mood} — учти мягко, не анализируй вслух."
+            except Exception:
+                pass
             if not self.llm.is_available():
                 text = f"Привет. {daypart.capitalize()} — я на связи."
             else:

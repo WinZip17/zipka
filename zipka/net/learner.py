@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 
 from zipka.config import Settings, get_settings
-from zipka.llm.ollama_client import OllamaClient
 from zipka.memory.store import MemoryStore
 
 
@@ -15,7 +15,7 @@ class NetLearner:
 
     def __init__(
         self,
-        llm: OllamaClient,
+        llm: Any,
         memory: MemoryStore,
         settings: Settings | None = None,
     ) -> None:

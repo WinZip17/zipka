@@ -7,7 +7,6 @@ from typing import Any
 from zipka.character.persona import Persona
 from zipka.config import Settings, ensure_data_dirs, get_settings
 from zipka.evolve.soft import SoftEvolve
-from zipka.llm.ollama_client import OllamaClient
 from zipka.memory.store import MemoryStore
 
 
@@ -18,7 +17,7 @@ class PseudoMind:
         self,
         persona: Persona,
         memory: MemoryStore,
-        llm: OllamaClient,
+        llm: Any,
         soft: SoftEvolve,
         settings: Settings | None = None,
     ) -> None:

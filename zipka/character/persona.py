@@ -72,6 +72,7 @@ class Persona:
         preferences: dict[str, Any] | None = None,
         notes: list[str] | None = None,
         mind_state: dict[str, Any] | None = None,
+        user_profile_block: str | None = None,
     ) -> str:
         p = self.load()
         lines = [
@@ -97,6 +98,8 @@ class Persona:
                 lines.append(f"Фокус: {focus}")
             if mood:
                 lines.append(f"Настроение: {mood}")
+        if user_profile_block:
+            lines.append(user_profile_block)
         if notes:
             lines.append("Память (свежие заметки):")
             lines.extend(f"- {n}" for n in notes[-8:])
@@ -104,5 +107,11 @@ class Persona:
             "Если хочешь изменить свой код, опиши правку и жди явного "
             "«разрешаю правку кода». Мягкую эволюцию характера/навыков "
             "можешь предлагать и применять сама."
+        )
+        lines.append(
+            "Идентифицируй собеседника и накапливай о нём знания: характер, "
+            "особенности, настроение и его сдвиги, что любит/не любит, "
+            "как обычно проводит время, тип личности и текущее состояние. "
+            "Учитывай это в тоне и советах; уточняй мягко, без допроса."
         )
         return "\n".join(lines)

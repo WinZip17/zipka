@@ -5,10 +5,10 @@ import re
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Any
 from xml.etree import ElementTree as ET
 
 from zipka.config import Settings, ensure_data_dirs, get_settings
-from zipka.llm.ollama_client import OllamaClient
 from zipka.memory.store import MemoryStore
 from zipka.system_limits import max_book_bytes
 
@@ -125,7 +125,7 @@ class BookReader:
 
     def __init__(
         self,
-        llm: OllamaClient,
+        llm: Any,
         memory: MemoryStore,
         settings: Settings | None = None,
     ) -> None:

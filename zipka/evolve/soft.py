@@ -4,7 +4,6 @@ import re
 from typing import Any
 
 from zipka.character.persona import Persona
-from zipka.llm.ollama_client import OllamaClient
 from zipka.memory.store import MemoryStore
 
 
@@ -18,7 +17,7 @@ class SoftEvolve:
         self,
         persona: Persona,
         memory: MemoryStore,
-        llm: OllamaClient,
+        llm: Any,
     ) -> None:
         self.persona = persona
         self.memory = memory

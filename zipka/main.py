@@ -28,15 +28,22 @@ def _agent() -> Zipka:
 
 @app.command()
 def status() -> None:
-    """Статус Зипки и Ollama."""
+    """Статус Зипки и LLM."""
     z = _agent()
     s = z.status()
+    llm = s.get("llm") or {}
+    backend = llm.get("backend", "ollama")
+    avail = llm.get("available", s.get("ollama"))
+    backend_line = (
+        f"LLM: {backend} — {'OK' if avail else 'offline'}"
+        + (f" ({llm.get('model_path')})" if llm.get("model_path") else "")
+    )
     console.print(
         Panel.fit(
             "\n".join(
                 [
                     f"Имя: {s['name']}",
-                    f"Ollama: {'OK' if s['ollama'] else 'offline'}",
+                    backend_line,
                     f"Модель: {s['model']}",
                     f"Модели: {', '.join(s['models']) or '—'}",
                     f"Eyes: {'on' if s['eyes'] else 'off'}",
@@ -45,6 +52,11 @@ def status() -> None:
                     f"Focus: {s['mind'].get('focus')}",
                     f"Mood: {s['mind'].get('mood')}",
                     f"Goals: {'; '.join(s['mind'].get('goals') or [])}",
+                    (
+                        f"Собеседник: {((s.get('user') or {}).get('name') or '—')}"
+                        f" · настроение {((s.get('user') or {}).get('mood') or '—')}"
+                        f" · наблюдений {((s.get('user') or {}).get('evidence_count') or 0)}"
+                    ),
                 ]
             ),
             title="Zipka",

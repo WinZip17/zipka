@@ -13,8 +13,11 @@ from zipka.character.persona import Persona
 from zipka.config import Settings, ensure_data_dirs, get_settings
 from zipka.evolve.hard import APPROVE_PHRASE, HardEvolve
 from zipka.evolve.soft import SoftEvolve
-from zipka.llm.ollama_client import OllamaClient, OllamaError
+from zipka.llm.base import LlmError
+from zipka.llm.factory import create_llm_client, describe_backend
+from zipka.llm.ollama_client import OllamaError
 from zipka.memory.store import MemoryStore
+from zipka.memory.user_profile import UserProfiler
 from zipka.mind.goals import PseudoMind
 from zipka.mind.proactive import ProactiveEngine
 from zipka.net.learner import NetLearner
@@ -80,7 +83,7 @@ class Zipka:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         ensure_data_dirs(self.settings)
-        self.llm = OllamaClient(self.settings)
+        self.llm = create_llm_client(self.settings)
         self.memory = MemoryStore(self.settings)
         self.persona = Persona(self.settings)
         self.soft = SoftEvolve(self.persona, self.memory, self.llm)
@@ -88,6 +91,7 @@ class Zipka:
         self.books = BookReader(self.llm, self.memory, self.settings)
         self.eyes = Eyes(self.settings)
         self.ears = Ears(self.settings)
+        self.user = UserProfiler(self.memory, self.llm, self.settings)
         self.mind = PseudoMind(
             self.persona, self.memory, self.llm, self.soft, self.settings
         )
@@ -103,6 +107,11 @@ class Zipka:
     def reload_runtime(self) -> None:
         """Пересоздать модули после очистки data/."""
         ensure_data_dirs(self.settings)
+        try:
+            self.eyes.off()
+        except Exception:
+            pass
+        self.llm = create_llm_client(self.settings)
         self.memory = MemoryStore(self.settings)
         self.persona = Persona(self.settings)
         self.soft = SoftEvolve(self.persona, self.memory, self.llm)
@@ -110,6 +119,7 @@ class Zipka:
         self.books = BookReader(self.llm, self.memory, self.settings)
         self.eyes = Eyes(self.settings)
         self.ears = Ears(self.settings)
+        self.user = UserProfiler(self.memory, self.llm, self.settings)
         self.mind = PseudoMind(
             self.persona, self.memory, self.llm, self.soft, self.settings
         )
@@ -129,20 +139,23 @@ class Zipka:
     def status(self) -> dict[str, Any]:
         from zipka.system_limits import available_ram_bytes, format_bytes, max_book_bytes
 
-        ollama_ok = self.llm.is_available()
+        backend_info = describe_backend(self.llm)
+        llm_ok = self.llm.is_available()
         models = []
-        if ollama_ok:
+        if llm_ok:
             try:
                 models = self.llm.list_models()
-            except OllamaError:
+            except (OllamaError, LlmError):
                 models = []
         book_limit = max_book_bytes()
         avail = available_ram_bytes()
+        model_name = backend_info.get("model") or self.settings.ollama_model
         return {
             "name": "Зипка",
-            "ollama": ollama_ok,
+            "ollama": llm_ok if backend_info.get("backend") == "ollama" else False,
+            "llm": backend_info,
             "models": models,
-            "model": self.settings.ollama_model,
+            "model": model_name,
             "vision_model": self.settings.vision_model,
             "eyes": self.eyes.enabled,
             "ears": self.ears.enabled,
@@ -156,6 +169,7 @@ class Zipka:
                 "ram_available_bytes": avail,
                 "ram_available_human": format_bytes(avail) if avail else None,
             },
+            "user": self.user.summary_for_ui(),
         }
 
     def build_messages(self, user_text: str) -> list[dict[str, str]]:
@@ -165,6 +179,7 @@ class Zipka:
             preferences=self.memory.get_preferences(),
             notes=notes,
             mind_state=self.mind.load(),
+            user_profile_block=self.user.prompt_block(),
         )
         system += (
             "\nПользователь может дать путь к книге или исходному коду "
@@ -268,17 +283,33 @@ class Zipka:
             return reply
 
         if not self.llm.is_available():
+            info = describe_backend(self.llm)
+            if info.get("backend") == "gguf":
+                return (
+                    f"Локальная модель {info.get('model') or 'GGUF'} найдена в data/models, "
+                    "но недоступна. Установи: pip install llama-cpp-python "
+                    "и перезапусти Зипку."
+                )
             return (
                 f"Ollama не отвечает на {self.settings.ollama_host}. "
                 "Запусти `ollama serve` и подтяни модель "
-                f"`ollama pull {self.settings.ollama_model}`."
+                f"`ollama pull {self.settings.ollama_model}`, "
+                "либо положи *.gguf в data/models (см. README)."
             )
 
         messages = self.build_messages(text)
-        reply = self.llm.chat(messages)
+        try:
+            reply = self.llm.chat(messages)
+        except LlmError as exc:
+            return str(exc)
         self._remember_turn(text, reply)
         self.mind.bump_turn()
         self.proactive.bump_turn()
+
+        try:
+            self.user.observe_dialogue(text, reply)
+        except Exception:
+            pass
 
         if auto_soft and self._wants_soft_evolve(text):
             try:
@@ -556,9 +587,17 @@ class Zipka:
         return self.proactive.maybe_rare_ping(force=force)
 
     def comment_eyes(self, description: str) -> str | None:
+        try:
+            self.user.observe_sensor("eyes", description)
+        except Exception:
+            pass
         return self.proactive.sensor_comment(modality="eyes", content=description)
 
     def comment_ears(self, heard: str) -> str | None:
+        try:
+            self.user.observe_sensor("ears", heard)
+        except Exception:
+            pass
         return self.proactive.sensor_comment(modality="ears", content=heard)
 
     def describe_image(self, image_b64: str, prompt: str = "Что ты видишь?") -> str:

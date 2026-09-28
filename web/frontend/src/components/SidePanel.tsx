@@ -165,7 +165,12 @@ export function SidePanel({
   });
 
   const toggleEyes = async () => {
-    await eyesAction(eyesOn ? "off" : "on");
+    try {
+      const data = await eyesAction(eyesOn ? "off" : "on");
+      if (data.message) onBubble(data.message, "bot");
+    } catch (err) {
+      onBubble(err instanceof Error ? err.message : String(err), "bot");
+    }
     onRefresh();
   };
 
@@ -273,8 +278,12 @@ export function SidePanel({
     setInfoOpen(true);
   };
 
+  const llmBackend = status?.llm?.backend || (status?.ollama ? "ollama" : "—");
+  const llmOk =
+    status?.llm?.available ??
+    (llmBackend === "gguf" ? Boolean(status?.model) : Boolean(status?.ollama));
   const statusLine = status
-    ? `Ollama: ${status.ollama ? "OK" : "offline"} · ${status.model} · eyes ${
+    ? `${llmBackend}: ${llmOk ? "OK" : "offline"} · ${status.model} · eyes ${
         status.eyes ? "on" : "off"
       } · ears ${status.ears ? "on" : "off"}`
     : "статус загружается…";
@@ -335,8 +344,8 @@ export function SidePanel({
         <Tooltip
           title={
             eyesOn
-              ? "Выключить глаза — камера не используется"
-              : "Включить глаза: Зипка может смотреть через камеру"
+              ? "Выключить глаза — камера освободится"
+              : "Включить глаза: откроется веб-камера"
           }
           arrow
           enterDelay={400}
@@ -564,6 +573,57 @@ export function SidePanel({
             </Box>
           </InfoBlock>
 
+          <InfoBlock title="Собеседник">
+            <InfoLine label="Имя" value={status?.user?.name || "ещё не узнала"} />
+            {status?.user?.how_to_address ? (
+              <InfoLine label="Обращение" value={status.user.how_to_address} />
+            ) : null}
+            <InfoLine
+              label="Настроение"
+              value={
+                status?.user?.mood
+                  ? status.user.mood_previous
+                    ? `${status.user.mood} (было: ${status.user.mood_previous})`
+                    : status.user.mood
+                  : "—"
+              }
+            />
+            <InfoLine
+              label="Тип личности"
+              value={status?.user?.personality_type || "—"}
+            />
+            <InfoLine
+              label="Характер"
+              value={(status?.user?.character || []).join(", ") || "—"}
+            />
+            <InfoLine
+              label="Особенности"
+              value={(status?.user?.peculiarities || []).join(", ") || "—"}
+            />
+            <InfoLine label="Любит" value={(status?.user?.likes || []).join(", ") || "—"} />
+            <InfoLine
+              label="Не любит"
+              value={(status?.user?.dislikes || []).join(", ") || "—"}
+            />
+            <InfoLine
+              label="Время"
+              value={(status?.user?.time_habits || []).join(", ") || "—"}
+            />
+            <InfoLine
+              label="Состояние"
+              value={
+                [status?.user?.current_state, status?.user?.energy && `энергия: ${status.user.energy}`]
+                  .filter(Boolean)
+                  .join("; ") || "—"
+              }
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+              Наблюдений: {status?.user?.evidence_count ?? 0}
+              {status?.user?.facts_count ? ` · фактов: ${status.user.facts_count}` : ""}
+              {" · "}профиль в data/memory/user_profile.json
+            </Typography>
+          </InfoBlock>
+
           <InfoBlock title="Лимиты">
             <InfoLine label="Макс. размер файла" value={bookLimit} />
             <InfoLine label="Свободная RAM" value={ramAvail} />
@@ -573,9 +633,27 @@ export function SidePanel({
           </InfoBlock>
 
           <InfoBlock title="Модель">
+            <InfoLine
+              label="Бэкенд"
+              value={
+                llmBackend === "gguf"
+                  ? `GGUF (${llmOk ? "готов" : "нужен llama-cpp-python"})`
+                  : llmBackend === "ollama"
+                    ? `Ollama (${status?.ollama ? "онлайн" : "офлайн"})`
+                    : String(llmBackend)
+              }
+            />
             <InfoLine label="Чат" value={status?.model || "—"} />
-            <InfoLine label="Vision" value={status?.vision_model || status?.model || "—"} />
-            <InfoLine label="Ollama" value={status?.ollama ? "онлайн" : "офлайн"} />
+            {llmBackend === "gguf" && status?.llm?.model_path ? (
+              <InfoLine label="Файл" value={status.llm.model_path} />
+            ) : null}
+            {llmBackend !== "gguf" ? (
+              <InfoLine label="Vision" value={status?.vision_model || status?.model || "—"} />
+            ) : (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                Vision/глаза в GGUF-режиме пока через Ollama
+              </Typography>
+            )}
             {models.length > 0 && (
               <Typography
                 variant="caption"

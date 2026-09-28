@@ -224,9 +224,6 @@ export default function App() {
           <Typography variant="h1" sx={{ fontSize: "1.55rem", m: 0 }}>
             Зипка
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            локальный агент · Ollama
-          </Typography>
         </Box>
       </Stack>
 

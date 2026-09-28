@@ -37,6 +37,9 @@ data/snapshots/
 data/patches/
 data/books/
 data/persona/persona.yaml
+data/models/*.gguf
+data/models/**/*.gguf
+!data/models/README.md
 
 # any accidental local dumps
 *.jsonl

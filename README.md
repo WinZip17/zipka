@@ -1,6 +1,6 @@
 # Zipka / Зипка
 
-Локальный саморазвивающийся агент на **Python + Ollama**.
+Локальный саморазвивающийся агент на **Python**. Модель — **файл GGUF в `data/models`** (без системной Ollama) или **Ollama**, если GGUF нет.
 
 ## Возможности
 
@@ -14,6 +14,26 @@
 
 ## Быстрый старт
 
+### Вариант A — без Ollama (файл модели)
+
+```bash
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+pip install llama-cpp-python
+copy .env.example .env
+
+# положи *.gguf в data/models (например qwen2.5-7b-instruct-q4_k_m.gguf)
+# ZIPKA_LLM_BACKEND=auto подхватит его сама
+
+python -m zipka.main status
+python -m zipka.main web
+```
+
+Каталог моделей: https://huggingface.co/models?library=gguf  
+Опционально в `.env`: `ZIPKA_GGUF_MODEL=имя_файла.gguf`, `ZIPKA_GGUF_CTX=4096`, `ZIPKA_GGUF_GPU_LAYERS=0`.
+
+### Вариант B — системная Ollama
+
 ```bash
 # если python в PATH:
 python -m venv .venv
@@ -22,7 +42,7 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
-# в .env укажи модель из `ollama list` (сейчас по умолчанию my_qwen:latest)
+# в .env: ZIPKA_LLM_BACKEND=ollama и модель из `ollama list` (по умолчанию my_qwen:latest)
 
 # web UI (React + @mui/material) — один раз собрать:
 cd web\frontend
@@ -38,6 +58,8 @@ python -m zipka.main web
 Web: http://127.0.0.1:8765
 
 Разработка UI: в одном терминале `python -m zipka.main web`, в другом `cd web/frontend && npm run dev` (Vite на :5173, API проксируется).
+
+**Приоритет (`ZIPKA_LLM_BACKEND=auto`):** если в `data/models` есть `*.gguf` → локальный llama.cpp; иначе Ollama. Глаза/vision пока только через Ollama.
 
 ## Запуск ярлыком
 
@@ -123,6 +145,7 @@ DJVU: читается через встроенный пакет **`djvu-rs`** 
 | Проактивность (пинги, приветствия) | `data/mind/proactive.json` (gitignore) |
 | Выжимки книг | `data/books/notes/*_digest.md` |
 | Распакованные из zip/rar | `data/books/extracted/` |
+| Локальные GGUF-модели | `data/models/*.gguf` (gitignore) |
 
 Основное хранилище знаний — **`data/memory/notes.jsonl`**: саммари книг (`book`), кода (`code`), обучения по сети (`net_learn`), снимков (`eyes`) и рефлексий (`reflection`).
 

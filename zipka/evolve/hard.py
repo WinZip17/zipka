@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from zipka.config import ROOT_DIR, Settings, ensure_data_dirs, get_settings
-from zipka.llm.ollama_client import OllamaClient
 from zipka.memory.store import MemoryStore
 
 APPROVE_PHRASE = "разрешаю правку кода"
@@ -70,7 +69,7 @@ class HardEvolve:
 
     def __init__(
         self,
-        llm: OllamaClient,
+        llm: Any,
         memory: MemoryStore,
         settings: Settings | None = None,
     ) -> None:
