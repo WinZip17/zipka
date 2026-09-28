@@ -125,7 +125,12 @@ export async function earsAction(action: string, seconds = 5) {
 
 export async function approvePatch() {
   const res = await fetch("/api/approve", { method: "POST" });
-  const data = await parseJson<{ id?: string; detail?: string }>(res);
+  const data = await parseJson<{
+    id?: string;
+    detail?: string;
+    frontend_rebuild?: string | null;
+    files?: string[];
+  }>(res);
   if (!res.ok) throw new Error(data.detail || "Нет патча");
   return data;
 }

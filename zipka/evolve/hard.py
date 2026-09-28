@@ -141,6 +141,43 @@ class HardEvolve:
             "измени проект",
             "сделай правки",
             "отрефактори",
+            "поменяй в интерфейсе",
+            "поправь интерфейс",
+            "поменяй ui",
+            "измени ui",
+            "в своём коде",
+            "в своем коде",
+            "сама себя",
+            "себя поправь",
+            "поправь себя",
+            "textarea",
+            "текстареа",
+            "поле ввода",
+        ]
+        return any(k in lowered for k in keys)
+
+    def wants_self_edit(self, text: str) -> bool:
+        """Правки самой Зипки (zipka/ + web/), а не внешнего last_project."""
+        lowered = text.lower()
+        keys = [
+            "себе",
+            "себя",
+            "свой код",
+            "своём коде",
+            "своем коде",
+            "свою",
+            "зипк",
+            "zipka",
+            "интерфейс",
+            "в чате",
+            "ui",
+            "composer",
+            "textarea",
+            "текстареа",
+            "поле ввода",
+            "web/frontend",
+            "фронтенд",
+            "frontend",
         ]
         return any(k in lowered for k in keys)
 
@@ -165,19 +202,36 @@ class HardEvolve:
         *,
         project_root: str | Path | None = None,
         context: str | None = None,
+        self_edit: bool = False,
     ) -> dict[str, Any]:
-        root = None
-        if project_root:
+        if self_edit:
+            root = None
+        elif project_root:
             root = self.remember_project(project_root)
         else:
             root = self.last_project()
 
         base = root or ROOT_DIR
         tree = self._list_editable_files(prefer_root=root)
+        focus_files = self._pick_focus_files(request, tree, limit=4)
+        focus_blobs: list[str] = []
+        for rel in focus_files:
+            abs_path = (base / rel).resolve()
+            try:
+                if abs_path.is_file() and abs_path.stat().st_size < 120_000:
+                    body = abs_path.read_text(encoding="utf-8", errors="ignore")
+                    focus_blobs.append(f"### {rel}\n```\n{body}\n```")
+            except OSError:
+                continue
+
         scope_hint = (
             f"Проект: {root}. Пути указывай относительно этой папки."
             if root
-            else "Можно менять файлы внутри zipka/ и web/ (пути от корня Zipka)."
+            else (
+                "Это самоправка Зипки. Пути относительно корня репозитория Zipka, "
+                "например: zipka/agent.py, web/frontend/src/components/Composer.tsx. "
+                "Меняй только zipka/ и web/. UI чата — в web/frontend/src/."
+            )
         )
         raw = self.llm.chat(
             [
@@ -187,7 +241,9 @@ class HardEvolve:
                         "Ты модуль hard-evolve Зипки. Верни ТОЛЬКО JSON:\n"
                         '{"files": [{"path": "relative/path.ext", '
                         '"content": "полный новый текст файла"}]}\n'
-                        f"{scope_hint} Не трогай .env и секреты."
+                        f"{scope_hint} Не трогай .env, secrets, node_modules, dist. "
+                        "Меняй минимум файлов. Если правишь React — сохрани существующие "
+                        "импорты и поведение, кроме запрошенного."
                     ),
                 },
                 {
@@ -195,8 +251,15 @@ class HardEvolve:
                     "content": (
                         f"Запрос: {request}\n\n"
                         + (f"Контекст изучения:\n{context[:8000]}\n\n" if context else "")
+                        + (
+                            "Текущие файлы для правки:\n"
+                            + "\n\n".join(focus_blobs)
+                            + "\n\n"
+                            if focus_blobs
+                            else ""
+                        )
                         + "Доступные файлы:\n"
-                        + "\n".join(tree[:100])
+                        + "\n".join(tree[:120])
                     ),
                 },
             ]
@@ -210,12 +273,11 @@ class HardEvolve:
                 continue
             if Path(rel).name.lower() in BLOCKED_NAMES:
                 continue
-            abs_path = (base / rel).resolve() if root else (ROOT_DIR / rel).resolve()
+            abs_path = (base / rel).resolve()
             if not self._is_allowed(abs_path):
                 continue
-            # store path relative to base for apply
             try:
-                store_rel = abs_path.relative_to(base).as_posix() if root else abs_path.relative_to(ROOT_DIR).as_posix()
+                store_rel = abs_path.relative_to(base).as_posix()
             except ValueError:
                 continue
             files.append({"path": store_rel, "content": content})
@@ -233,6 +295,7 @@ class HardEvolve:
             "request": request,
             "files": files,
             "project_root": str(root) if root else None,
+            "self_edit": bool(self_edit or root is None),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending_approval",
         }
@@ -246,6 +309,7 @@ class HardEvolve:
                 "files": [f["path"] for f in files],
                 "request": request,
                 "project_root": pending["project_root"],
+                "self_edit": pending["self_edit"],
             },
         )
         return pending
@@ -289,12 +353,21 @@ class HardEvolve:
             abs_path.write_text(item["content"], encoding="utf-8")
             applied.append(rel)
 
+        rebuild_note = None
+        if any(
+            rel.replace("\\", "/").startswith("web/frontend/")
+            or "/frontend/src/" in rel.replace("\\", "/")
+            for rel in applied
+        ):
+            rebuild_note = self._maybe_rebuild_frontend()
+
         meta = {
             "id": patch_id,
             "applied_at": datetime.now(timezone.utc).isoformat(),
             "files": applied,
             "request": pending.get("request"),
             "project_root": pending.get("project_root"),
+            "frontend_rebuild": rebuild_note,
         }
         (self.patches_dir / patch_id / "meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -348,6 +421,7 @@ class HardEvolve:
             "Файлы:",
             *[f"- {f['path']} ({len(f['content'])} символов)" for f in pending["files"]],
             f"Чтобы применить, напиши точно: {APPROVE_PHRASE}",
+            "Или нажми кнопку «Разрешаю правку кода» в web.",
         ]
         return "\n".join(lines)
 
@@ -365,17 +439,37 @@ class HardEvolve:
     def _list_editable_files(
         self, *, prefer_root: Path | None = None
     ) -> list[str]:
+        """Для самоправки пути относительно ROOT_DIR (zipka/..., web/...)."""
         files: list[str] = []
-        roots = [prefer_root] if prefer_root else self.allowed_roots
-        if prefer_root and prefer_root not in self.allowed_roots:
-            roots = [prefer_root, *self.allowed_roots]
-        for root in roots:
-            if not root or not root.exists():
-                continue
+        skip = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist"}
+
+        if prefer_root is None:
+            scan_roots = [
+                self.settings.package_dir.resolve(),
+                self.settings.web_dir.resolve(),
+            ]
+            for root in scan_roots:
+                if not root.exists():
+                    continue
+                for p in root.rglob("*"):
+                    if not p.is_file():
+                        continue
+                    if any(part in skip for part in p.parts):
+                        continue
+                    if p.suffix.lower() not in EDITABLE_SUFFIXES:
+                        continue
+                    if p.name.lower() in BLOCKED_NAMES:
+                        continue
+                    try:
+                        files.append(p.relative_to(ROOT_DIR).as_posix())
+                    except ValueError:
+                        continue
+        else:
+            root = prefer_root.resolve()
             for p in root.rglob("*"):
                 if not p.is_file():
                     continue
-                if any(part in {".git", "node_modules", ".venv", "venv", "__pycache__"} for part in p.parts):
+                if any(part in skip for part in p.parts):
                     continue
                 if p.suffix.lower() not in EDITABLE_SUFFIXES:
                     continue
@@ -385,14 +479,81 @@ class HardEvolve:
                     files.append(p.relative_to(root).as_posix())
                 except ValueError:
                     continue
-        # unique keep order
-        seen = set()
-        out = []
+
+        seen: set[str] = set()
+        out: list[str] = []
         for f in files:
             if f not in seen:
                 seen.add(f)
                 out.append(f)
         return out
+
+    def _pick_focus_files(
+        self, request: str, tree: list[str], *, limit: int = 4
+    ) -> list[str]:
+        lowered = request.lower()
+        scored: list[tuple[int, str]] = []
+        hints = [
+            ("composer", 50),
+            ("textarea", 40),
+            ("input", 20),
+            ("чат", 25),
+            ("сообщен", 25),
+            ("интерфейс", 15),
+            ("sidepanel", 30),
+            ("app.tsx", 20),
+            ("agent.py", 15),
+            ("style", 10),
+            ("frontend", 10),
+        ]
+        for rel in tree:
+            score = 0
+            name = rel.lower()
+            for hint, w in hints:
+                if hint in lowered and hint in name:
+                    score += w
+            if "composer" in name:
+                score += 10
+            if score:
+                scored.append((score, rel))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        picked = [rel for _, rel in scored[:limit]]
+        if any(
+            k in lowered
+            for k in ("textarea", "текстареа", "поле ввода", "инпут", "input", "сообщен")
+        ):
+            cand = "web/frontend/src/components/Composer.tsx"
+            if cand in tree and cand not in picked:
+                picked.insert(0, cand)
+        return picked[:limit]
+
+    def _maybe_rebuild_frontend(self) -> str | None:
+        """Пересобрать React UI после правок исходников."""
+        import subprocess
+
+        frontend = ROOT_DIR / "web" / "frontend"
+        if not (frontend / "package.json").exists():
+            return None
+        npm = shutil.which("npm") or shutil.which("npm.cmd")
+        if not npm:
+            return "npm не найден — собери вручную: cd web/frontend && npm run build"
+        try:
+            proc = subprocess.run(
+                [npm, "run", "build"],
+                cwd=str(frontend),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=180,
+                check=False,
+            )
+            if proc.returncode == 0:
+                return "web/frontend: npm run build OK"
+            err = (proc.stderr or proc.stdout or "").strip()[-500:]
+            return f"web/frontend build failed: {err}"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"web/frontend build error: {exc}"
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:

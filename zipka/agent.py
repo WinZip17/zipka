@@ -228,10 +228,13 @@ class Zipka:
             if not self.hard.has_pending():
                 return "Нечего утверждать — патча нет."
             meta = self.hard.apply_pending()
+            rebuild = meta.get("frontend_rebuild")
             reply = (
                 f"Патч {meta['id']} применён. Файлы: {', '.join(meta['files'])}. "
                 f"Откат: `zipka rollback {meta['id']}`"
             )
+            if rebuild:
+                reply += f"\nСборка UI: {rebuild}"
             self._remember_turn(text, reply)
             return reply
 
@@ -239,8 +242,8 @@ class Zipka:
             return self.hard.format_pending()
 
         if self.hard.wants_code_change(text):
-            project = self.hard.last_project()
-            # strip edit intent from being double-handled as read
+            self_edit = self.hard.wants_self_edit(text)
+            project = None if self_edit else self.hard.last_project()
             ctx = None
             notes = self.memory.recent_notes(limit=5)
             if notes:
@@ -250,6 +253,7 @@ class Zipka:
                     text,
                     project_root=project,
                     context=ctx,
+                    self_edit=self_edit or project is None,
                 )
             except Exception as exc:
                 reply = f"Не смогла подготовить патч: {exc}"

@@ -203,7 +203,8 @@ def api_reset_info() -> dict:
 def api_approve() -> dict:
     if not agent.hard.has_pending():
         raise HTTPException(400, "Нет ожидающего патча")
-    return agent.hard.apply_pending()
+    meta = agent.hard.apply_pending()
+    return meta
 
 
 @app.get("/api/pending")

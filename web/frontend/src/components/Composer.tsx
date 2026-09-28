@@ -12,6 +12,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { FILE_ACCEPT } from "../api";
 
+
 type Props = {
   disabled?: boolean;
   stagedFile: File | null;
@@ -52,7 +53,7 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
           e.preventDefault();
           submit();
         }}
-        sx={{ p: 1.5, alignItems: "center" }}
+        sx={{ p: 1.5, alignItems: "flex-end" }}
       >
         <input
           ref={fileRef}
@@ -85,7 +86,7 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
           sx={{
             flex: 1,
             display: "flex",
-            alignItems: "center",
+            alignItems: "stretch",
             px: 1.5,
             py: 0.5,
             bgcolor: "#0f1613",
@@ -95,7 +96,10 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
         >
           <InputBase
             fullWidth
-            placeholder="Сообщение… можно прикрепить файл"
+            multiline
+            minRows={1}
+            maxRows={6}
+            placeholder="Сообщение… Enter — отправить, Shift+Enter — новая строка"
             value={text}
             disabled={disabled}
             onChange={(e) => setText(e.target.value)}
@@ -105,7 +109,12 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
                 submit();
               }
             }}
-            sx={{ color: "text.primary", fontSize: "0.95rem" }}
+            sx={{
+              color: "text.primary",
+              fontSize: "0.95rem",
+              alignItems: "flex-start",
+              "& textarea": { lineHeight: 1.45 },
+            }}
           />
         </Paper>
         <IconButton

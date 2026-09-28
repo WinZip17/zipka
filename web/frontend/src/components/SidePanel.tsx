@@ -207,7 +207,9 @@ export function SidePanel({
   const onApprove = async () => {
     try {
       const data = await approvePatch();
-      onBubble(`Патч применён: ${data.id}`, "bot");
+      let msg = `Патч применён: ${data.id}`;
+      if (data.frontend_rebuild) msg += `\nСборка UI: ${data.frontend_rebuild}`;
+      onBubble(msg, "bot");
     } catch (err) {
       onBubble(err instanceof Error ? err.message : "Нет патча", "bot");
     }
