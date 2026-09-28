@@ -49,6 +49,8 @@ export type UserProfileSummary = {
   energy?: string;
   facts_count?: number;
   evidence_count?: number;
+  bond?: "early" | "growing" | "attached" | string;
+  inner_circle?: { name?: string; role?: string }[];
   updated_at?: string;
   style_ready?: boolean;
   style_samples?: number;

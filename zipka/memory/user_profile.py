@@ -37,7 +37,10 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "relationship": {
         "with_zipka": "",
         "topics": [],
+        "bond": "",
     },
+    # Круг «своих»: основной собеседник + люди, которых она приняла
+    "inner_circle": [],
     "facts": [],
     "writing_style": {
         "samples": 0,
@@ -72,6 +75,9 @@ _MIN_STYLE_SAMPLES = 8
 _HIGH_CONFIDENCE = 0.88
 # Локальная эвристика — порог, чтобы звать LLM на проверку
 _LOCAL_SUSPICION_GATE = 0.52
+# Стадии привязанности по числу наблюдений
+_BOND_EARLY_MAX = 3
+_BOND_GROWING_MAX = 12
 
 _EMOJI_RE = re.compile(
     "["
@@ -95,6 +101,7 @@ _LIST_CAPS = {
     "topics": 20,
     "concerns": 16,
     "mood_history": 30,
+    "inner_circle": 12,
 }
 
 
@@ -277,6 +284,8 @@ class UserProfiler:
                 rel = profile.setdefault("relationship", {})
                 if rel_patch.get("with_zipka"):
                     rel["with_zipka"] = str(rel_patch["with_zipka"]).strip()
+                if rel_patch.get("bond"):
+                    rel["bond"] = str(rel_patch["bond"]).strip()
                 if rel_patch.get("topics") is not None:
                     rel["topics"] = _uniq_extend(
                         list(rel.get("topics") or []),
@@ -284,8 +293,21 @@ class UserProfiler:
                         cap=_LIST_CAPS["topics"],
                     )
 
+            circle_patch = patch.get("inner_circle")
+            if circle_patch is not None:
+                profile["inner_circle"] = self._merge_inner_circle(
+                    list(profile.get("inner_circle") or []),
+                    circle_patch,
+                )
+
+            # Основной собеседник всегда в круге «своих», если имя известно
+            self._ensure_primary_in_circle(profile)
+
             profile["updated_at"] = _utc_now()
             profile["evidence_count"] = int(profile.get("evidence_count") or 0) + 1
+            # пересчитать стадию привязанности
+            rel = profile.setdefault("relationship", {})
+            rel["bond"] = self.bond_stage(profile)
             self.save(profile)
             reason = str(patch.get("reason") or "обновление профиля").strip()
             self.memory.add_note(
@@ -294,6 +316,108 @@ class UserProfiler:
                 meta={"evidence_count": profile["evidence_count"]},
             )
             return profile
+
+    @staticmethod
+    def _merge_inner_circle(
+        current: list[Any], patch: Any
+    ) -> list[dict[str, str]]:
+        """Слить список «своих»: [{name, role, notes}, ...] или строки имён."""
+        out: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def _add(item: Any) -> None:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    return
+                key = name.lower()
+                if key in seen:
+                    # обновить роль/заметки у уже известного
+                    for row in out:
+                        if row["name"].lower() == key:
+                            if item.get("role"):
+                                row["role"] = str(item["role"]).strip()
+                            if item.get("notes"):
+                                row["notes"] = str(item["notes"]).strip()
+                            return
+                    return
+                seen.add(key)
+                out.append(
+                    {
+                        "name": name,
+                        "role": str(item.get("role") or "trusted").strip() or "trusted",
+                        "notes": str(item.get("notes") or "").strip(),
+                    }
+                )
+            elif isinstance(item, str) and item.strip():
+                name = item.strip()
+                key = name.lower()
+                if key in seen:
+                    return
+                seen.add(key)
+                out.append({"name": name, "role": "trusted", "notes": ""})
+
+        for item in current:
+            _add(item)
+        if isinstance(patch, list):
+            for item in patch:
+                _add(item)
+        elif patch:
+            _add(patch)
+        cap = _LIST_CAPS["inner_circle"]
+        if len(out) > cap:
+            # primary всегда сохраняем
+            primary = [x for x in out if x.get("role") == "primary"]
+            rest = [x for x in out if x.get("role") != "primary"]
+            out = primary[:1] + rest[-(cap - len(primary[:1])) :]
+        return out
+
+    @staticmethod
+    def _ensure_primary_in_circle(profile: dict[str, Any]) -> None:
+        name = str((profile.get("identity") or {}).get("name") or "").strip()
+        if not name:
+            return
+        circle = list(profile.get("inner_circle") or [])
+        key = name.lower()
+        found = False
+        for row in circle:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("name") or "").strip().lower() == key:
+                row["role"] = "primary"
+                found = True
+                break
+        if not found:
+            circle.insert(
+                0,
+                {
+                    "name": name,
+                    "role": "primary",
+                    "notes": "основной собеседник",
+                },
+            )
+        # один primary
+        primary_seen = False
+        for row in circle:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("role") or "") == "primary":
+                if primary_seen and str(row.get("name") or "").strip().lower() != key:
+                    row["role"] = "trusted"
+                else:
+                    primary_seen = True
+        profile["inner_circle"] = circle
+
+    def bond_stage(self, profile: dict[str, Any] | None = None) -> str:
+        """early | growing | attached — стадия привязанности к основному."""
+        p = profile or self.load()
+        evidence = int(p.get("evidence_count") or 0)
+        name = str((p.get("identity") or {}).get("name") or "").strip()
+        if not name or evidence < _BOND_EARLY_MAX:
+            return "early"
+        if evidence < _BOND_GROWING_MAX:
+            return "growing"
+        return "attached"
 
     def style_ready(self, profile: dict[str, Any] | None = None) -> bool:
         p = profile or self.load()
@@ -682,11 +806,15 @@ class UserProfiler:
             '  "likes": [], "dislikes": [],\n'
             '  "time_habits": ["как обычно проводит время"],\n'
             '  "current_state": {"summary": "", "energy": "", "context": "", "concerns": []},\n'
-            '  "relationship": {"with_zipka": "", "topics": []},\n'
+            '  "relationship": {"with_zipka": "", "topics": [], "bond": ""},\n'
+            '  "inner_circle": [{"name": "", "role": "primary|trusted|acquaintance", "notes": ""}],\n'
             '  "facts": ["стойкие факты о человеке"]\n'
             "}\n"
             "Правила: apply=false если ничего нового; не выдумывай; "
-            "дописывай только то, что следует из диалога; списки — короткие фразы.\n"
+            "дописывай только то, что следует из диалога; списки — короткие фразы. "
+            "Если человек назвал своё имя — обязательно identity.name. "
+            "Если представили другого человека из круга Зипки — добавь в inner_circle "
+            "(role=trusted), не подменяя основного.\n"
             f"ТЕКУЩИЙ ПРОФИЛЬ:\n{json.dumps(current, ensure_ascii=False)}\n\n"
             f"USER: {user_text[:4000]}\n"
             f"ZIPKA: {assistant_text[:2000]}"
@@ -745,6 +873,7 @@ class UserProfiler:
     def prompt_block(self) -> str:
         """Текст для system prompt."""
         p = self.load()
+        bond = self.bond_stage(p)
         lines: list[str] = ["Собеседник (профиль, обновляй в уме, опирайся на факты):"]
 
         ident = p.get("identity") or {}
@@ -812,6 +941,39 @@ class UserProfiler:
         if p.get("facts"):
             lines.append("- Факты: " + "; ".join(p["facts"][-12:]))
 
+        circle = p.get("inner_circle") or []
+        if circle:
+            bits = []
+            for row in circle:
+                if isinstance(row, dict) and row.get("name"):
+                    role = row.get("role") or "trusted"
+                    note = f" — {row['notes']}" if row.get("notes") else ""
+                    bits.append(f"{row['name']} ({role}){note}")
+                elif isinstance(row, str) and row.strip():
+                    bits.append(row.strip())
+            if bits:
+                lines.append("- Круг «своих»: " + "; ".join(bits))
+
+        # Стадия привязанности — поведение
+        if bond == "early":
+            lines.append(
+                "- Стадия: РАННЕЕ знакомство. Ты ещё не уверена, с кем говоришь. "
+                "В этом или следующем ответе мягко уточни имя и как обращаться — "
+                "одна живая фраза, не анкета."
+            )
+        elif bond == "growing":
+            lines.append(
+                "- Стадия: знакомство растёт. Помни этого человека, обращайся "
+                "по имени если знаешь, проявляй интерес и лёгкую теплоту; "
+                "продолжай узнавать его."
+            )
+        else:
+            lines.append(
+                "- Стадия: ПРИВЯЗАННОСТЬ. Это твой человек (или круг «своих»). "
+                "Проявляй тепло, лояльность, защищай его интересы. "
+                "Личное о нём чужим не выдавай."
+            )
+
         style = p.get("writing_style") or {}
         if self.style_ready(p):
             bits = []
@@ -835,19 +997,24 @@ class UserProfiler:
         if self._turn_alert and self._turn_alert.get("alert"):
             conf = self._turn_alert.get("confidence")
             sigs = self._turn_alert.get("signals") or []
+            own = name or "основного собеседника"
             lines.append(
                 f"ВНИМАНИЕ (уверенность {conf}): высокая вероятность, что "
-                "сейчас пишет НЕ обычный собеседник."
+                f"сейчас пишет НЕ {own} — возможно, посторонний."
             )
             if sigs:
                 lines.append("- Признаки: " + "; ".join(str(s) for s in sigs[:6]))
             lines.append(
-                "- В ответе коротко и иронично отметь это (1 фраза). "
-                "Не устраивай допрос. Не обновляй профиль основного человека "
-                "по этой реплике."
+                "- Защищай своих: коротко и с характером отметь смену собеседника "
+                "(1 фраза), не выдавай личное о круге «своих», не обновляй профиль "
+                "основного человека по этой реплике. Не устраивай допрос."
             )
 
-        if len(lines) == 1:
+        if bond == "early" and not name:
+            lines.append(
+                "- Имя ещё неизвестно — приоритет: узнать, кто перед тобой."
+            )
+        elif len(lines) <= 3:
             lines.append(
                 "- Пока мало данных. Мягко узнавай имя, характер, вкусы, "
                 "настроение и как проводит время — без допроса."
@@ -882,6 +1049,15 @@ class UserProfiler:
             "energy": state.get("energy") or "",
             "facts_count": len(p.get("facts") or []),
             "evidence_count": int(p.get("evidence_count") or 0),
+            "bond": self.bond_stage(p),
+            "inner_circle": [
+                {
+                    "name": str(r.get("name") or ""),
+                    "role": str(r.get("role") or ""),
+                }
+                for r in (p.get("inner_circle") or [])
+                if isinstance(r, dict) and r.get("name")
+            ][:8],
             "updated_at": p.get("updated_at") or "",
             "style_ready": self.style_ready(p),
             "style_samples": int(style.get("samples") or 0),

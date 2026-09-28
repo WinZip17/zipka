@@ -633,6 +633,29 @@ export function SidePanel({
               <InfoLine label="Обращение" value={status.user.how_to_address} />
             ) : null}
             <InfoLine
+              label="Привязанность"
+              value={
+                status?.user?.bond === "attached"
+                  ? "привязана"
+                  : status?.user?.bond === "growing"
+                    ? "узнаёт"
+                    : "раннее знакомство"
+              }
+            />
+            {(status?.user?.inner_circle || []).length > 0 ? (
+              <InfoLine
+                label="Свои"
+                value={(status?.user?.inner_circle || [])
+                  .map((p) =>
+                    p.role && p.role !== "trusted"
+                      ? `${p.name} (${p.role === "primary" ? "основной" : p.role})`
+                      : p.name || "",
+                  )
+                  .filter(Boolean)
+                  .join(", ")}
+              />
+            ) : null}
+            <InfoLine
               label="Настроение"
               value={
                 status?.user?.mood
@@ -690,6 +713,7 @@ export function SidePanel({
                 {status.user.speaker.signals?.length
                   ? ` — ${status.user.speaker.signals.slice(0, 3).join("; ")}`
                   : ""}
+                {" · "}защищает своих
               </Typography>
             ) : status?.user?.style_ready ? (
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
