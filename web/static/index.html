@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Зипка</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <div class="brand">
+        <div class="mark">Z</div>
+        <div>
+          <h1>Зипка</h1>
+          <p class="tag">локальный агент · Ollama</p>
+        </div>
+      </div>
+      <div id="status" class="status">…</div>
+    </header>
+
+    <main class="layout">
+      <section class="chat-panel">
+        <div id="log" class="log"></div>
+        <form id="chat-form" class="composer">
+          <input id="msg" type="text" placeholder="Напиши Зипке или путь к книге…" autocomplete="off" />
+          <label class="attach" title="Загрузить книгу">
+            +
+            <input id="book-file" type="file" accept=".txt,.md,.markdown,.fb2,.xml,.zip,.rar,.py,.js,.mjs,.cjs,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.hpp,.cs,.rb,.php,.swift,.kt,.sql,.sh,.ps1,.json,.yaml,.yml,.toml,.html,.css,.scss,.vue,.svelte,.lua,.dart" hidden />
+          </label>
+          <button type="submit">Отправить</button>
+        </form>
+        <p class="hint">Книга/код: «прочитай C:\path\app.py», «изучи D:\project\src» или прикрепи файл (+).</p>
+      </section>
+
+      <aside class="side">
+        <h2>Сенсоры</h2>
+        <div class="row">
+          <button data-eyes="on">Eyes on</button>
+          <button data-eyes="off">Eyes off</button>
+          <button data-eyes="snap">Snap</button>
+        </div>
+        <div class="row">
+          <button data-ears="on">Ears on</button>
+          <button data-ears="off">Ears off</button>
+          <button data-ears="listen">Listen</button>
+        </div>
+
+        <h2>Разум</h2>
+        <button id="reflect">Рефлексия</button>
+        <pre id="mind" class="mind"></pre>
+
+        <h2>Патч</h2>
+        <pre id="pending" class="mind"></pre>
+        <button id="approve">Разрешаю правку кода</button>
+
+        <h2>Книга / код</h2>
+        <form id="book-form" class="composer stack">
+          <input id="book-path" type="text" placeholder="C:\path\app.py или папка\src" />
+          <input id="book-member" type="text" placeholder="файл внутри архива (опц.)" />
+          <button type="submit">Изучить по пути</button>
+        </form>
+        <label class="upload-box">
+          <span>Или перетащи / выбери файл (.py .js .ts …)</span>
+          <input id="book-file-side" type="file" accept=".txt,.md,.markdown,.fb2,.xml,.zip,.rar,.py,.js,.mjs,.cjs,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.hpp,.cs,.rb,.php,.swift,.kt,.sql,.sh,.ps1,.json,.yaml,.yml,.toml,.html,.css,.scss,.vue,.svelte,.lua,.dart" />
+        </label>
+
+        <h2>Обучение</h2>
+        <form id="learn-form" class="composer stack">
+          <input id="learn-q" type="text" placeholder="URL или тема" />
+          <button type="submit">Learn</button>
+        </form>
+      </aside>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,470 @@
+from __future__ import annotations
+
+import re
+import shutil
+import zipfile
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+from zipka.config import Settings, ensure_data_dirs, get_settings
+from zipka.llm.ollama_client import OllamaClient
+from zipka.memory.store import MemoryStore
+
+BOOK_SUFFIXES = {".txt", ".md", ".markdown", ".fb2", ".xml"}
+
+CODE_SUFFIXES = {
+    ".py",
+    ".pyi",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".java",
+    ".kt",
+    ".kts",
+    ".go",
+    ".rs",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".scala",
+    ".sql",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".ps1",
+    ".psm1",
+    ".bat",
+    ".cmd",
+    ".json",
+    ".jsonc",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",
+    ".vue",
+    ".svelte",
+    ".astro",
+    ".lua",
+    ".r",
+    ".R",
+    ".pl",
+    ".pm",
+    ".ex",
+    ".exs",
+    ".erl",
+    ".hs",
+    ".clj",
+    ".dart",
+    ".zig",
+    ".nim",
+    ".v",
+    ".gradle",
+    ".cmake",
+    ".makefile",
+    ".mk",
+    ".dockerfile",
+    ".tf",
+    ".proto",
+    ".graphql",
+    ".gql",
+    ".wasm",
+}
+
+ARCHIVE_SUFFIXES = {".zip", ".rar"}
+READABLE_SUFFIXES = BOOK_SUFFIXES | CODE_SUFFIXES
+
+SKIP_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    "target",
+    ".idea",
+    ".vscode",
+    "vendor",
+    "coverage",
+}
+
+MAX_FILE_BYTES = 1_500_000
+
+
+class BookReader:
+    """Читает книги и исходники (.py/.js/.ts/…) в память."""
+
+    def __init__(
+        self,
+        llm: OllamaClient,
+        memory: MemoryStore,
+        settings: Settings | None = None,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.llm = llm
+        self.memory = memory
+        ensure_data_dirs(self.settings)
+        self.notes_dir = self.settings.data_dir / "books" / "notes"
+        self.extract_dir = self.settings.data_dir / "books" / "extracted"
+        self.extract_dir.mkdir(parents=True, exist_ok=True)
+
+    def read(
+        self,
+        path: str | Path,
+        *,
+        max_chunks: int = 6,
+        member: str | None = None,
+        max_files: int = 12,
+    ) -> dict:
+        file_path = Path(path).expanduser().resolve()
+        if not file_path.exists():
+            raise FileNotFoundError(f"Файл не найден: {file_path}")
+
+        if file_path.is_dir():
+            return self._read_directory(
+                file_path, max_chunks=max_chunks, max_files=max_files
+            )
+
+        source_label = file_path.name
+        inner_name: str | None = None
+        work_path = file_path
+        if file_path.suffix.lower() in ARCHIVE_SUFFIXES:
+            work_path, inner_name = self._extract_book(file_path, member=member)
+            source_label = f"{file_path.name}:{inner_name}"
+
+        return self._summarize_file(
+            work_path,
+            source_label=source_label,
+            origin=str(file_path),
+            archive_member=inner_name,
+            max_chunks=max_chunks,
+        )
+
+    def list_archive_books(self, path: str | Path) -> list[str]:
+        file_path = Path(path).expanduser().resolve()
+        suffix = file_path.suffix.lower()
+        if suffix == ".zip":
+            return self._list_zip_books(file_path)
+        if suffix == ".rar":
+            return self._list_rar_books(file_path)
+        raise ValueError("Ожидается .zip или .rar")
+
+    def _read_directory(
+        self, directory: Path, *, max_chunks: int, max_files: int
+    ) -> dict:
+        files = self._collect_source_files(directory)[:max_files]
+        if not files:
+            raise RuntimeError(
+                f"В `{directory}` нет читаемых исходников "
+                f"({', '.join(sorted(CODE_SUFFIXES)[:12])}…)."
+            )
+        digests: list[str] = []
+        total_chunks = 0
+        per_file_chunks = max(2, max_chunks // max(1, min(len(files), 4)))
+        for fp in files:
+            part = self._summarize_file(
+                fp,
+                source_label=str(fp.relative_to(directory)),
+                origin=str(fp),
+                archive_member=None,
+                max_chunks=per_file_chunks,
+            )
+            digests.append(
+                f"## {fp.relative_to(directory).as_posix()}\n\n{part['digest']}"
+            )
+            total_chunks += part["chunks"]
+
+        digest = "\n\n".join(digests)
+        out = self.notes_dir / f"{directory.name}_dir_digest.md"
+        out.write_text(
+            f"# Изучение папки: {directory}\n\n"
+            f"Файлов: {len(files)}\n\n{digest}\n",
+            encoding="utf-8",
+        )
+        self.memory.add_note(
+            "code",
+            f"Изучена папка {directory} ({len(files)} файлов).",
+            meta={"source": str(directory), "files": [str(f) for f in files]},
+        )
+        return {
+            "source": str(directory),
+            "archive_member": None,
+            "chunks": total_chunks,
+            "digest_path": str(out),
+            "digest": digest,
+            "kind": "code_dir",
+            "files": [str(f) for f in files],
+        }
+
+    def _summarize_file(
+        self,
+        path: Path,
+        *,
+        source_label: str,
+        origin: str,
+        archive_member: str | None,
+        max_chunks: int,
+    ) -> dict:
+        kind = self._kind_for(path)
+        text = self._load_text(path)
+        if not text.strip():
+            raise RuntimeError(f"Файл пуст или не прочитан: {path}")
+
+        chunks = self._chunk(text, size=3500)[:max_chunks]
+        summaries: list[str] = []
+        for i, chunk in enumerate(chunks, 1):
+            instruction = self._instruction(kind, source_label, i, len(chunks))
+            summary = self.llm.summarize(chunk, instruction=instruction)
+            summaries.append(summary)
+            self.memory.add_note(
+                kind,
+                summary,
+                meta={
+                    "source": origin,
+                    "archive_member": archive_member,
+                    "chunk": i,
+                    "path": str(path),
+                },
+            )
+        digest = "\n\n".join(summaries)
+        digest_stem = Path(origin).stem
+        if archive_member:
+            digest_stem = f"{Path(origin).stem}__{Path(archive_member).stem}"
+        out = self.notes_dir / f"{digest_stem}_digest.md"
+        title = "Код" if kind == "code" else "Выжимка"
+        out.write_text(f"# {title}: {source_label}\n\n{digest}\n", encoding="utf-8")
+        return {
+            "source": origin,
+            "archive_member": archive_member,
+            "chunks": len(chunks),
+            "digest_path": str(out),
+            "digest": digest,
+            "kind": kind,
+        }
+
+    @staticmethod
+    def _kind_for(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix in CODE_SUFFIXES:
+            return "code"
+        if suffix in BOOK_SUFFIXES:
+            # xml may be fb2 or config — FictionBook check later; default book
+            return "book"
+        return "book"
+
+    @staticmethod
+    def _instruction(kind: str, source_label: str, i: int, n: int) -> str:
+        if kind == "code":
+            return (
+                f"Изучи фрагмент {i}/{n} исходника «{source_label}». "
+                "Кратко: назначение, ключевые функции/классы/API, зависимости, "
+                "важные паттерны и риски. Не копируй длинные куски кода."
+            )
+        return (
+            f"Сделай краткую выжимку фрагмента {i}/{n} книги "
+            f"«{source_label}». Не цитируй длинные куски дословно."
+        )
+
+    def _collect_source_files(self, root: Path) -> list[Path]:
+        found: list[Path] = []
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if any(part in SKIP_DIR_NAMES for part in path.parts):
+                continue
+            if path.suffix.lower() not in CODE_SUFFIXES:
+                continue
+            try:
+                if path.stat().st_size > MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            found.append(path)
+        # Prefer "core" files first: shorter path, then common entry names
+        def rank(p: Path) -> tuple:
+            name = p.name.lower()
+            boost = 0
+            if name in {"main.py", "app.py", "index.ts", "index.js", "main.ts", "main.go"}:
+                boost = -10
+            return (boost, len(p.parts), str(p).lower())
+
+        return sorted(found, key=rank)
+
+    def _extract_book(
+        self, archive: Path, *, member: str | None = None
+    ) -> tuple[Path, str]:
+        suffix = archive.suffix.lower()
+        if suffix == ".zip":
+            members = self._list_zip_books(archive)
+            chosen = self._pick_member(members, member)
+            return self._extract_zip_member(archive, chosen), chosen
+        if suffix == ".rar":
+            members = self._list_rar_books(archive)
+            chosen = self._pick_member(members, member)
+            return self._extract_rar_member(archive, chosen), chosen
+        raise ValueError(f"Неподдерживаемый архив: {suffix}")
+
+    @staticmethod
+    def _pick_member(members: list[str], member: str | None) -> str:
+        if not members:
+            raise RuntimeError(
+                "В архиве нет читаемых файлов "
+                "(книги или исходники .py/.js/.ts/…)."
+            )
+        if member:
+            for name in members:
+                if name == member or name.lower() == member.lower():
+                    return name
+                if Path(name).name.lower() == Path(member).name.lower():
+                    return name
+            raise FileNotFoundError(
+                f"Файл «{member}» не найден в архиве. Есть: {', '.join(members[:40])}"
+            )
+        for preferred in (
+            ".fb2",
+            ".py",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".go",
+            ".rs",
+            ".txt",
+            ".md",
+            ".xml",
+        ):
+            for name in members:
+                if Path(name).suffix.lower() == preferred:
+                    return name
+        return members[0]
+
+    def _list_zip_books(self, archive: Path) -> list[str]:
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = []
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                name = info.filename
+                if Path(name).suffix.lower() in READABLE_SUFFIXES:
+                    names.append(name)
+            return sorted(names)
+
+    def _extract_zip_member(self, archive: Path, member: str) -> Path:
+        target_dir = self.extract_dir / archive.stem
+        if target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive, "r") as zf:
+            dest = (target_dir / Path(member).name).resolve()
+            if not str(dest).startswith(str(target_dir.resolve())):
+                raise RuntimeError("Небезопасный путь внутри ZIP.")
+            with zf.open(member) as src, dest.open("wb") as out:
+                shutil.copyfileobj(src, out)
+        return dest
+
+    def _rarfile(self):
+        try:
+            import rarfile
+        except ImportError as exc:
+            raise RuntimeError(
+                "Для .rar нужен пакет rarfile: pip install rarfile"
+            ) from exc
+        return rarfile
+
+    def _list_rar_books(self, archive: Path) -> list[str]:
+        rarfile = self._rarfile()
+        try:
+            with rarfile.RarFile(archive) as rf:
+                names = []
+                for info in rf.infolist():
+                    if info.is_dir():
+                        continue
+                    name = info.filename
+                    if Path(name).suffix.lower() in READABLE_SUFFIXES:
+                        names.append(name.replace("\\", "/"))
+                return sorted(names)
+        except rarfile.NeedFirstVolume as exc:
+            raise RuntimeError("Нужен первый том многотомного RAR.") from exc
+        except rarfile.RarCannotExec as exc:
+            raise RuntimeError(
+                "Для RAR нужен UnRAR/WinRAR в PATH "
+                "(или установи UnRAR и укажи rarfile.UNRAR_TOOL)."
+            ) from exc
+
+    def _extract_rar_member(self, archive: Path, member: str) -> Path:
+        rarfile = self._rarfile()
+        target_dir = self.extract_dir / archive.stem
+        if target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dest = (target_dir / Path(member).name).resolve()
+        if not str(dest).startswith(str(target_dir.resolve())):
+            raise RuntimeError("Небезопасный путь внутри RAR.")
+        try:
+            with rarfile.RarFile(archive) as rf:
+                with rf.open(member) as src, dest.open("wb") as out:
+                    shutil.copyfileobj(src, out)
+        except rarfile.RarCannotExec as exc:
+            raise RuntimeError(
+                "Для RAR нужен UnRAR/WinRAR в PATH."
+            ) from exc
+        return dest
+
+    def _load_text(self, path: Path) -> str:
+        suffix = path.suffix.lower()
+        # Skip obvious binaries by size already handled; read as text
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+        if suffix in {".txt", ".md", ".markdown"}:
+            return raw
+        if suffix in {".fb2"} or (
+            suffix == ".xml" and "<FictionBook" in raw[:2000]
+        ):
+            return self._fb2_to_text(raw)
+        # code and other text formats as-is
+        return raw
+
+    def _fb2_to_text(self, raw: str) -> str:
+        cleaned = re.sub(r'xmlns(:\w+)?="[^"]+"', "", raw)
+        try:
+            root = ET.fromstring(cleaned)
+        except ET.ParseError:
+            return re.sub(r"<[^>]+>", " ", raw)
+        parts: list[str] = []
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1].lower()
+            if tag in {"p", "v", "subtitle", "title"} and elem.text:
+                parts.append(elem.text.strip())
+            if elem.tail and elem.tail.strip():
+                parts.append(elem.tail.strip())
+        return "\n".join(p for p in parts if p)
+
+    @staticmethod
+    def _chunk(text: str, size: int = 3500) -> list[str]:
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        if not text:
+            return []
+        return [text[i : i + size] for i in range(0, len(text), size)]
