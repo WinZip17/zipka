@@ -61,8 +61,11 @@ def chat(
     if message:
         console.print(Markdown(z.chat(message)))
         return
+    hello = z.greet()
+    if hello:
+        console.print(Panel(Markdown(hello), title="Зипка"))
     console.print(
-        "[bold]Зипка онлайн.[/bold] Команды в чате: /quit, /status. "
+        "[bold]Зипка онлайн.[/bold] Команды: /quit, /status, /ping. "
         f"Approve патча: «{APPROVE_PHRASE}»"
     )
     while True:
@@ -72,12 +75,20 @@ def chat(
             console.print("\nПока.")
             break
         if not user:
+            # occasional rare ping when idle enter
+            ping = z.rare_ping()
+            if ping:
+                console.print(Panel(Markdown(ping), title="Зипка · пинг"))
             continue
         if user in {"/quit", "/exit", "выход"}:
             console.print("Пока.")
             break
         if user == "/status":
             status()
+            continue
+        if user == "/ping":
+            ping = z.rare_ping(force=True)
+            console.print(Panel(Markdown(ping or "Лимит пингов на сегодня."), title="пинг"))
             continue
         reply = z.chat(user)
         console.print(Panel(Markdown(reply), title="Зипка"))
@@ -107,6 +118,9 @@ def read(
     member: Optional[str] = typer.Option(
         None, "--member", "-m", help="Файл внутри zip/rar"
     ),
+    comment: Optional[str] = typer.Option(
+        None, "--comment", "-c", help="Комментарий/фокус при чтении"
+    ),
     list_members: bool = typer.Option(
         False, "--list", help="Показать книги внутри архива"
     ),
@@ -118,22 +132,28 @@ def read(
         console.print(Panel("\n".join(books) or "(пусто)", title="archive"))
         return
     with console.status("Читаю..."):
-        result = z.books.read(path, member=member)
+        result = z.books.read(path, member=member, comment=comment)
     member_line = (
         f"Внутри архива: {result['archive_member']}\n"
         if result.get("archive_member")
         else ""
     )
-    console.print(
-        Panel(
-            f"Источник: {result['source']}\n"
-            f"{member_line}"
-            f"Фрагментов: {result['chunks']}\n"
-            f"Digest: {result['digest_path']}\n\n"
-            f"{result['digest'][:2000]}",
-            title="book",
-        )
+    body = (
+        f"Источник: {result['source']}\n"
+        f"{member_line}"
+        f"Фрагментов: {result['chunks']}\n"
+        f"Digest: {result['digest_path']}\n\n"
+        f"{result['digest'][:2000]}"
     )
+    follow = z.proactive.study_followup(
+        source=str(path),
+        digest=result.get("digest") or "",
+        kind=result.get("kind") or "book",
+        comment=comment,
+    )
+    if follow:
+        body = z.proactive.attach(body, follow)
+    console.print(Panel(body, title="book"))
 
 
 @app.command()
@@ -154,6 +174,9 @@ def eyes(
             desc = z.describe_image(snap["image_b64"])
         console.print(Panel(desc, title="глаза"))
         z.memory.add_note("eyes", desc, meta={"path": snap["path"]})
+        comment = z.comment_eyes(desc)
+        if comment:
+            console.print(Panel(Markdown(comment), title="Зипка · глаза"))
     else:
         raise typer.BadParameter("on|off|snap")
 
@@ -174,6 +197,9 @@ def ears(
         console.print(f"Слушаю {seconds} сек...")
         text = z.ears.listen(seconds=seconds)
         console.print(Panel(text, title="уши"))
+        comment = z.comment_ears(text)
+        if comment:
+            console.print(Panel(Markdown(comment), title="Зипка · уши"))
         reply = z.chat(text)
         console.print(Panel(Markdown(reply), title="Зипка"))
     else:

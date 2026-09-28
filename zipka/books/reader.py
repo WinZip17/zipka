@@ -140,6 +140,7 @@ class BookReader:
         max_chunks: int = 6,
         member: str | None = None,
         max_files: int = 12,
+        comment: str | None = None,
     ) -> dict:
         file_path = Path(path).expanduser().resolve()
         if not file_path.exists():
@@ -147,7 +148,10 @@ class BookReader:
 
         if file_path.is_dir():
             return self._read_directory(
-                file_path, max_chunks=max_chunks, max_files=max_files
+                file_path,
+                max_chunks=max_chunks,
+                max_files=max_files,
+                comment=comment,
             )
 
         source_label = file_path.name
@@ -163,6 +167,7 @@ class BookReader:
             origin=str(file_path),
             archive_member=inner_name,
             max_chunks=max_chunks,
+            comment=comment,
         )
 
     def list_archive_books(self, path: str | Path) -> list[str]:
@@ -175,7 +180,12 @@ class BookReader:
         raise ValueError("Ожидается .zip или .rar")
 
     def _read_directory(
-        self, directory: Path, *, max_chunks: int, max_files: int
+        self,
+        directory: Path,
+        *,
+        max_chunks: int,
+        max_files: int,
+        comment: str | None = None,
     ) -> dict:
         files = self._collect_source_files(directory)[:max_files]
         if not files:
@@ -193,6 +203,7 @@ class BookReader:
                 origin=str(fp),
                 archive_member=None,
                 max_chunks=per_file_chunks,
+                comment=comment,
             )
             digests.append(
                 f"## {fp.relative_to(directory).as_posix()}\n\n{part['digest']}"
@@ -201,15 +212,19 @@ class BookReader:
 
         digest = "\n\n".join(digests)
         out = self.notes_dir / f"{directory.name}_dir_digest.md"
-        out.write_text(
-            f"# Изучение папки: {directory}\n\n"
-            f"Файлов: {len(files)}\n\n{digest}\n",
-            encoding="utf-8",
-        )
+        header = f"# Изучение папки: {directory}\n\nФайлов: {len(files)}\n"
+        if comment:
+            header += f"\nКомментарий пользователя: {comment}\n"
+        out.write_text(f"{header}\n{digest}\n", encoding="utf-8")
         self.memory.add_note(
             "code",
-            f"Изучена папка {directory} ({len(files)} файлов).",
-            meta={"source": str(directory), "files": [str(f) for f in files]},
+            f"Изучена папка {directory} ({len(files)} файлов)."
+            + (f" Комментарий: {comment}" if comment else ""),
+            meta={
+                "source": str(directory),
+                "files": [str(f) for f in files],
+                "comment": comment,
+            },
         )
         return {
             "source": str(directory),
@@ -219,6 +234,7 @@ class BookReader:
             "digest": digest,
             "kind": "code_dir",
             "files": [str(f) for f in files],
+            "comment": comment,
         }
 
     def _summarize_file(
@@ -229,6 +245,7 @@ class BookReader:
         origin: str,
         archive_member: str | None,
         max_chunks: int,
+        comment: str | None = None,
     ) -> dict:
         kind = self._kind_for(path)
         text = self._load_text(path)
@@ -238,7 +255,9 @@ class BookReader:
         chunks = self._chunk(text, size=3500)[:max_chunks]
         summaries: list[str] = []
         for i, chunk in enumerate(chunks, 1):
-            instruction = self._instruction(kind, source_label, i, len(chunks))
+            instruction = self._instruction(
+                kind, source_label, i, len(chunks), comment=comment
+            )
             summary = self.llm.summarize(chunk, instruction=instruction)
             summaries.append(summary)
             self.memory.add_note(
@@ -249,6 +268,7 @@ class BookReader:
                     "archive_member": archive_member,
                     "chunk": i,
                     "path": str(path),
+                    "comment": comment,
                 },
             )
         digest = "\n\n".join(summaries)
@@ -257,7 +277,10 @@ class BookReader:
             digest_stem = f"{Path(origin).stem}__{Path(archive_member).stem}"
         out = self.notes_dir / f"{digest_stem}_digest.md"
         title = "Код" if kind == "code" else "Выжимка"
-        out.write_text(f"# {title}: {source_label}\n\n{digest}\n", encoding="utf-8")
+        header = f"# {title}: {source_label}\n"
+        if comment:
+            header += f"\nКомментарий пользователя: {comment}\n"
+        out.write_text(f"{header}\n{digest}\n", encoding="utf-8")
         return {
             "source": origin,
             "archive_member": archive_member,
@@ -265,6 +288,7 @@ class BookReader:
             "digest_path": str(out),
             "digest": digest,
             "kind": kind,
+            "comment": comment,
         }
 
     @staticmethod
@@ -273,21 +297,35 @@ class BookReader:
         if suffix in CODE_SUFFIXES:
             return "code"
         if suffix in BOOK_SUFFIXES:
-            # xml may be fb2 or config — FictionBook check later; default book
             return "book"
         return "book"
 
     @staticmethod
-    def _instruction(kind: str, source_label: str, i: int, n: int) -> str:
+    def _instruction(
+        kind: str,
+        source_label: str,
+        i: int,
+        n: int,
+        *,
+        comment: str | None = None,
+    ) -> str:
+        focus = ""
+        if comment and comment.strip():
+            focus = (
+                f"\nКомментарий/фокус пользователя (обязательно учти): {comment.strip()}\n"
+                "Отвечай в первую очередь на этот фокус, остальное — кратко."
+            )
         if kind == "code":
             return (
                 f"Изучи фрагмент {i}/{n} исходника «{source_label}». "
                 "Кратко: назначение, ключевые функции/классы/API, зависимости, "
                 "важные паттерны и риски. Не копируй длинные куски кода."
+                f"{focus}"
             )
         return (
             f"Сделай краткую выжимку фрагмента {i}/{n} книги "
             f"«{source_label}». Не цитируй длинные куски дословно."
+            f"{focus}"
         )
 
     def _collect_source_files(self, root: Path) -> list[Path]:

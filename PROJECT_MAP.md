@@ -46,6 +46,7 @@ zipka/
     sensors/eyes.py
     sensors/ears.py
     mind/goals.py
+    mind/proactive.py    # приветствия, цели, уточнения, сенсоры, редкие пинги
     net/learner.py
     safety/policy.py
   web/

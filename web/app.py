@@ -36,6 +36,7 @@ class LearnIn(BaseModel):
 class ReadIn(BaseModel):
     path: str
     member: str | None = None
+    comment: str | None = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -57,6 +58,12 @@ def api_chat(body: ChatIn) -> dict:
     return {"reply": reply, "approve_phrase": APPROVE_PHRASE}
 
 
+@app.get("/api/chat/history")
+def api_chat_history(limit: int = 30, before: int | None = None) -> dict:
+    limit = max(1, min(limit, 100))
+    return agent.memory.chat_history(limit=limit, before=before)
+
+
 @app.post("/api/eyes")
 def api_eyes(body: ActionIn) -> dict:
     action = body.action.lower()
@@ -68,7 +75,13 @@ def api_eyes(body: ActionIn) -> dict:
         snap = agent.eyes.snap()
         desc = agent.describe_image(snap["image_b64"])
         agent.memory.add_note("eyes", desc, meta={"path": snap["path"]})
-        return {"ok": True, "path": snap["path"], "description": desc}
+        comment = agent.comment_eyes(desc)
+        return {
+            "ok": True,
+            "path": snap["path"],
+            "description": desc,
+            "comment": comment,
+        }
     raise HTTPException(400, "action must be on|off|snap")
 
 
@@ -81,8 +94,14 @@ def api_ears(body: ActionIn) -> dict:
         return {"ok": True, "message": agent.ears.off()}
     if action == "listen":
         text = agent.ears.listen(seconds=body.seconds)
+        comment = agent.comment_ears(text)
         reply = agent.chat(text)
-        return {"ok": True, "heard": text, "reply": reply}
+        return {
+            "ok": True,
+            "heard": text,
+            "comment": comment,
+            "reply": reply,
+        }
     raise HTTPException(400, "action must be on|off|listen")
 
 
@@ -93,13 +112,16 @@ def api_learn(body: LearnIn) -> dict:
 
 @app.post("/api/read")
 def api_read(body: ReadIn) -> dict:
-    return agent.books.read(body.path, member=body.member)
+    return agent.books.read(
+        body.path, member=body.member, comment=body.comment
+    )
 
 
 @app.post("/api/upload-book")
 async def api_upload_book(
     file: UploadFile = File(...),
     member: str | None = Form(default=None),
+    comment: str | None = Form(default=None),
 ) -> dict:
     raw = await file.read()
     if not raw:
@@ -108,7 +130,10 @@ async def api_upload_book(
         raise HTTPException(400, "Файл больше 80 МБ")
     try:
         return agent.ingest_uploaded_book(
-            file.filename or "book.txt", raw, member=member or None
+            file.filename or "book.txt",
+            raw,
+            member=member or None,
+            comment=(comment or "").strip() or None,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -132,3 +157,18 @@ def api_approve() -> dict:
 def api_pending() -> dict:
     pending = agent.hard.load_pending()
     return {"pending": pending, "approve_phrase": APPROVE_PHRASE}
+
+
+@app.get("/api/proactive/hello")
+def api_hello() -> dict:
+    text = agent.greet()
+    return {"message": text, "pings": agent.proactive.rare_ping_status()}
+
+
+@app.get("/api/proactive/ping")
+def api_ping(force: bool = False) -> dict:
+    text = agent.rare_ping(force=force)
+    return {
+        "message": text,
+        "pings": agent.proactive.rare_ping_status(),
+    }

@@ -51,18 +51,17 @@ Web: http://127.0.0.1:8765
 1. **В чате по пути** (CLI или web):
    ```
    прочитай C:\Users\WinZip\Desktop\книга.fb2
-   изучи D:\Project2\zipka\zipka\agent.py
-   изучи D:\Project2\zipka\zipka
-   прочитай D:\books\archive.zip внутри main.py
+   изучи D:\Project2\zipka\zipka\agent.py комментарий: разбери soft-evolve
+   прочитай D:\books\archive.zip внутри main.py комментарий: только API
    что в архиве D:\books\archive.zip
    ```
-2. **Загрузить файл в web**: кнопка `+`, блок «Книга / код» или drag-and-drop  
-   (книги + исходники: `.py`, `.js`, `.ts`, `.tsx`, `.go`, `.rs`, …).
+2. **Загрузить файл в web**: кнопка `+` / drag-drop → появится поле **комментария** → «Изучить с комментарием»  
+   (без комментария тоже можно — просто нажми «Изучить»).
 3. **CLI**:
    ```bash
-   python -m zipka.main read PATH
+   python -m zipka.main read PATH -c "разбери обработку ошибок"
    python -m zipka.main read PATH --list
-   python -m zipka.main read PATH -m file.py
+   python -m zipka.main read PATH -m file.py -c "фокус на main"
    ```
 
 Для кода Зипка делает разбор: назначение, API, зависимости, паттерны (не копирует длинные куски).  
@@ -83,7 +82,17 @@ Web: http://127.0.0.1:8765
 | `python -m zipka.main rollback ID` | Откат патча |
 | `python -m zipka.main web` | Web UI |
 
-## Где хранятся знания
+## Проактивность
+
+Зипка может заговорить первой:
+
+1. **Приветствие** — при старте CLI-чата / открытии web  
+2. **Реплики по целям** — roughly каждые 5 реплик в сессии  
+3. **Уточнения** — после изучения книги/кода (1–2 вопроса)  
+4. **Комментарии глаз/ушей** — только если сочла наблюдение интересным  
+5. **Редкие пинги** — не больше **3 раз в день**, с паузой ≥3 часа (web опрашивает ~раз в 12 мин)
+
+Состояние: `data/mind/proactive.json`. В CLI: `/ping` — форс-пинг (считается в дневной лимит).
 
 Всё лежит в папке `data/`:
 
@@ -94,12 +103,16 @@ Web: http://127.0.0.1:8765
 | Навыки | `data/memory/skills.json` |
 | Предпочтения | `data/memory/preferences.json` |
 | Лог эволюции | `data/memory/evolve_log.jsonl` |
-| Характер | `data/persona/persona.yaml` |
-| Цели / настроение / фокус | `data/mind/state.json` |
+| Характер (живой, локально) | `data/persona/persona.yaml` (gitignore) |
+| Seed характера | `data/persona/persona.example.yaml` |
+| Цели / настроение / фокус | `data/mind/state.json` (gitignore) |
+| Проактивность (пинги, приветствия) | `data/mind/proactive.json` (gitignore) |
 | Выжимки книг | `data/books/notes/*_digest.md` |
 | Распакованные из zip/rar | `data/books/extracted/` |
 
 Основное хранилище знаний — **`data/memory/notes.jsonl`**: саммари книг (`book`), кода (`code`), обучения по сети (`net_learn`), снимков (`eyes`) и рефлексий (`reflection`).
+
+Все результаты обучения (`data/memory`, `data/mind`, `data/books`, живой `persona.yaml` и т.д.) в **`.gitignore`** — в репозитории остаётся чистый проект + `persona.example.yaml`.
 
 ## Безопасность
 

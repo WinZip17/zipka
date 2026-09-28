@@ -112,14 +112,50 @@ class MemoryStore:
         )
 
     def recent_chat(self, limit: int = 20) -> list[dict[str, str]]:
-        if not self.chat_path.exists():
-            return []
-        rows: list[dict[str, str]] = []
-        with self.chat_path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                rows.append({"role": row["role"], "content": row["content"]})
-        return rows[-limit:]
+        chunk = self.chat_history(limit=limit)
+        return [
+            {"role": m["role"], "content": m["content"]} for m in chunk["messages"]
+        ]
+
+    def chat_history(
+        self, *, limit: int = 30, before: int | None = None
+    ) -> dict[str, Any]:
+        """Пагинация истории: последние `limit` или порция перед индексом `before`."""
+        rows: list[dict[str, Any]] = []
+        if self.chat_path.exists():
+            with self.chat_path.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    rows.append(
+                        {
+                            "role": row.get("role", "assistant"),
+                            "content": row.get("content", ""),
+                            "ts": row.get("ts"),
+                        }
+                    )
+        total = len(rows)
+        if before is None:
+            end = total
+        else:
+            end = max(0, min(before, total))
+        start = max(0, end - max(1, limit))
+        messages = [
+            {
+                "index": start + i,
+                "role": row["role"],
+                "content": row["content"],
+                "ts": row.get("ts"),
+            }
+            for i, row in enumerate(rows[start:end])
+        ]
+        return {
+            "messages": messages,
+            "total": total,
+            "start": start,
+            "end": end,
+            "has_more": start > 0,
+            "oldest_index": start,
+        }

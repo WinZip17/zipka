@@ -16,6 +16,7 @@ from zipka.evolve.soft import SoftEvolve
 from zipka.llm.ollama_client import OllamaClient, OllamaError
 from zipka.memory.store import MemoryStore
 from zipka.mind.goals import PseudoMind
+from zipka.mind.proactive import ProactiveEngine
 from zipka.net.learner import NetLearner
 from zipka.safety.policy import SafetyPolicy
 from zipka.sensors.ears import Ears
@@ -50,6 +51,10 @@ _MEMBER_RE = re.compile(
     rf"(?:внутри|файл(?:ом)?|member|-m)\s+(?P<q>['\"])?(?P<name>[^\s'\"]+\.(?:{_FILE_EXTS}))(?P=q)?",
     re.IGNORECASE,
 )
+_COMMENT_RE = re.compile(
+    r"(?:комментарий|учти|с\s+комментарием|фокус|note|comment)\s*[:\-–—]\s*(?P<c>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class Zipka:
@@ -66,6 +71,9 @@ class Zipka:
         self.ears = Ears(self.settings)
         self.mind = PseudoMind(
             self.persona, self.memory, self.llm, self.soft, self.settings
+        )
+        self.proactive = ProactiveEngine(
+            self.llm, self.memory, self.mind, self.settings
         )
         self.net = NetLearner(self.llm, self.memory, self.settings)
         self.safety = SafetyPolicy()
@@ -89,6 +97,7 @@ class Zipka:
             "ears": self.ears.enabled,
             "pending_patch": self.hard.has_pending(),
             "mind": self.mind.load(),
+            "proactive": self.proactive.rare_ping_status(),
         }
 
     def build_messages(self, user_text: str) -> list[dict[str, str]]:
@@ -155,6 +164,7 @@ class Zipka:
         reply = self.llm.chat(messages)
         self._remember_turn(text, reply)
         self.mind.bump_turn()
+        self.proactive.bump_turn()
 
         if auto_soft and self._wants_soft_evolve(text):
             try:
@@ -172,6 +182,12 @@ class Zipka:
                 )
             except Exception:
                 pass
+
+        try:
+            nudge = self.proactive.maybe_goal_nudge()
+            reply = self.proactive.attach(reply, nudge)
+        except Exception:
+            pass
 
         return reply
 
@@ -196,6 +212,7 @@ class Zipka:
 
         member_match = _MEMBER_RE.search(text)
         member = member_match.group("name") if member_match else None
+        comment = self._extract_comment(text)
 
         try:
             if (
@@ -207,7 +224,7 @@ class Zipka:
                 listing = "\n".join(f"- {b}" for b in books) or "(пусто)"
                 return f"В архиве `{path.name}`:\n{listing}"
 
-            result = self.books.read(path, member=member)
+            result = self.books.read(path, member=member, comment=comment)
             kind = result.get("kind") or "book"
             verb = "Изучила" if kind.startswith("code") else "Прочитала"
             inner = (
@@ -218,19 +235,37 @@ class Zipka:
             files_line = ""
             if result.get("files"):
                 files_line = f"Файлов: {len(result['files'])}.\n"
+            comment_line = f"С учётом комментария: {comment}\n" if comment else ""
             digest_preview = (result.get("digest") or "")[:1500]
-            return (
+            reply = (
                 f"{verb}{inner}: `{path}`\n"
+                f"{comment_line}"
                 f"{files_line}"
                 f"Фрагментов: {result['chunks']}. "
                 f"Выжимка: `{result['digest_path']}`\n\n"
                 f"{digest_preview}"
             )
+            try:
+                follow = self.proactive.study_followup(
+                    source=str(path),
+                    digest=result.get("digest") or "",
+                    kind=kind,
+                    comment=comment,
+                )
+                reply = self.proactive.attach(reply, follow)
+            except Exception:
+                pass
+            return reply
         except Exception as exc:
             return f"Не смогла прочитать `{path}`: {exc}"
 
     def ingest_uploaded_book(
-        self, filename: str, content: bytes, *, member: str | None = None
+        self,
+        filename: str,
+        content: bytes,
+        *,
+        member: str | None = None,
+        comment: str | None = None,
     ) -> dict[str, Any]:
         safe_name = Path(filename).name
         if not safe_name or safe_name in {".", ".."}:
@@ -244,19 +279,42 @@ class Zipka:
             )
         dest = self.uploads_dir / safe_name
         dest.write_bytes(content)
-        result = self.books.read(dest, member=member)
+        result = self.books.read(dest, member=member, comment=comment)
         result["uploaded_path"] = str(dest)
         preview = (result.get("digest") or "")[:1500]
         kind = result.get("kind") or "book"
         label = "код" if kind.startswith("code") else "файл"
+        comment_line = f"Комментарий учтён: {comment}\n" if comment else ""
         reply = (
             f"{label.capitalize()} `{safe_name}` принят и изучен.\n"
+            f"{comment_line}"
             f"Фрагментов: {result['chunks']}. "
             f"Выжимка: `{result['digest_path']}`\n\n{preview}"
         )
-        self._remember_turn(f"[upload] {safe_name}", reply)
+        try:
+            follow = self.proactive.study_followup(
+                source=safe_name,
+                digest=result.get("digest") or "",
+                kind=kind,
+                comment=comment,
+            )
+            reply = self.proactive.attach(reply, follow)
+        except Exception:
+            pass
+        note = f"[upload] {safe_name}"
+        if comment:
+            note += f" | {comment}"
+        self._remember_turn(note, reply)
         result["reply"] = reply
         return result
+
+    @staticmethod
+    def _extract_comment(text: str) -> str | None:
+        match = _COMMENT_RE.search(text)
+        if not match:
+            return None
+        comment = match.group("c").strip().strip("\"'")
+        return comment or None
 
     @staticmethod
     def _extract_book_path(text: str) -> Path | None:
@@ -300,6 +358,18 @@ class Zipka:
             "запомни предпочтение",
         ]
         return any(k in lowered for k in keys)
+
+    def greet(self, *, force: bool = False) -> str | None:
+        return self.proactive.greeting(force=force)
+
+    def rare_ping(self, *, force: bool = False) -> str | None:
+        return self.proactive.maybe_rare_ping(force=force)
+
+    def comment_eyes(self, description: str) -> str | None:
+        return self.proactive.sensor_comment(modality="eyes", content=description)
+
+    def comment_ears(self, heard: str) -> str | None:
+        return self.proactive.sensor_comment(modality="ears", content=heard)
 
     def describe_image(self, image_b64: str, prompt: str = "Что ты видишь?") -> str:
         messages = self.build_messages(prompt)

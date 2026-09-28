@@ -1,13 +1,39 @@
+# --- secrets / local env ---
 .env
+.env.*
+!.env.example
+
+# --- python ---
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
+.eggs/
+dist/
+build/
 .venv/
 venv/
-data/memory/
-data/snapshots/
-data/patches/
-data/books/notes/
-*.log
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- logs / OS ---
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- runtime learning data (start clean from clone) ---
+# Keep only scaffolding + examples under data/
+data/memory/
+data/mind/
+data/snapshots/
+data/patches/
+data/books/
+data/persona/persona.yaml
+
+# any accidental local dumps
+*.jsonl
+!**/fixtures/**/*.jsonl

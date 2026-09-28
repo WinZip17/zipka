@@ -21,16 +21,26 @@
 
     <main class="layout">
       <section class="chat-panel">
-        <div id="log" class="log"></div>
+        <div id="log" class="log">
+          <div id="history-sentinel" class="history-sentinel hidden">↑ раньше</div>
+        </div>
         <form id="chat-form" class="composer">
           <input id="msg" type="text" placeholder="Напиши Зипке или путь к книге…" autocomplete="off" />
-          <label class="attach" title="Загрузить книгу">
+          <label class="attach" title="Прикрепить файл">
             +
             <input id="book-file" type="file" accept=".txt,.md,.markdown,.fb2,.xml,.zip,.rar,.py,.js,.mjs,.cjs,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.hpp,.cs,.rb,.php,.swift,.kt,.sql,.sh,.ps1,.json,.yaml,.yml,.toml,.html,.css,.scss,.vue,.svelte,.lua,.dart" hidden />
           </label>
           <button type="submit">Отправить</button>
         </form>
-        <p class="hint">Книга/код: «прочитай C:\path\app.py», «изучи D:\project\src» или прикрепи файл (+).</p>
+        <div id="pending-file" class="pending-file hidden">
+          <div class="pending-meta">
+            <strong id="pending-name">файл</strong>
+            <button type="button" id="pending-cancel" class="ghost">✕</button>
+          </div>
+          <input id="pending-comment" type="text" placeholder="Комментарий к файлу (что учесть при чтении)…" />
+          <button type="button" id="pending-read">Изучить с комментарием</button>
+        </div>
+        <p class="hint">Сначала прикрепи файл (+), напиши комментарий, потом «Изучить». Или: «изучи C:\a.py комментарий: разбери auth».</p>
       </section>
 
       <aside class="side">
@@ -58,10 +68,11 @@
         <form id="book-form" class="composer stack">
           <input id="book-path" type="text" placeholder="C:\path\app.py или папка\src" />
           <input id="book-member" type="text" placeholder="файл внутри архива (опц.)" />
+          <input id="book-comment" type="text" placeholder="комментарий / фокус (опц.)" />
           <button type="submit">Изучить по пути</button>
         </form>
         <label class="upload-box">
-          <span>Или перетащи / выбери файл (.py .js .ts …)</span>
+          <span>Или выбери файл — потом комментарий слева и «Изучить»</span>
           <input id="book-file-side" type="file" accept=".txt,.md,.markdown,.fb2,.xml,.zip,.rar,.py,.js,.mjs,.cjs,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.hpp,.cs,.rb,.php,.swift,.kt,.sql,.sh,.ps1,.json,.yaml,.yml,.toml,.html,.css,.scss,.vue,.svelte,.lua,.dart" />
         </label>
 

@@ -24,9 +24,17 @@ class Persona:
         self.settings = settings or get_settings()
         ensure_data_dirs(self.settings)
         self.path = self.settings.data_dir / "persona" / "persona.yaml"
+        self.example_path = self.settings.data_dir / "persona" / "persona.example.yaml"
         if not self.path.exists():
-            self.save(DEFAULT_PERSONA)
+            self._seed_from_example_or_default()
         self.data = self.load()
+
+    def _seed_from_example_or_default(self) -> None:
+        if self.example_path.exists():
+            raw = yaml.safe_load(self.example_path.read_text(encoding="utf-8")) or {}
+            self.save({**DEFAULT_PERSONA, **raw})
+        else:
+            self.save(DEFAULT_PERSONA)
 
     def load(self) -> dict[str, Any]:
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
