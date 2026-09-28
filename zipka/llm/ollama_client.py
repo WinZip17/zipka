@@ -7,6 +7,7 @@ import httpx
 
 from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
+from zipka.llm.sanitize import strip_thinking
 from zipka.runtime_settings import resolve_gpu_layers
 
 
@@ -109,7 +110,7 @@ class OllamaClient:
                         f"{detail or r.reason_phrase}"
                     )
                 data = r.json()
-                return data.get("message", {}).get("content", "")
+                return strip_thinking(data.get("message", {}).get("content", ""))
         except OllamaError:
             raise
         except httpx.HTTPError as exc:

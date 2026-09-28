@@ -5,6 +5,7 @@ from typing import Any
 
 from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
+from zipka.llm.sanitize import strip_thinking
 from zipka.runtime_settings import resolve_gpu_layers
 
 
@@ -247,11 +248,19 @@ class GgufClient:
             llm, clean, n_ctx=n_ctx, max_out=want_out
         )
         try:
-            result = llm.create_chat_completion(
-                messages=fitted,
-                temperature=temp,
-                max_tokens=out_tokens,
-            )
+            kwargs: dict[str, Any] = {
+                "messages": fitted,
+                "temperature": temp,
+                "max_tokens": out_tokens,
+            }
+            # Qwen3: по возможности сразу без thinking-блоков
+            try:
+                result = llm.create_chat_completion(
+                    **kwargs,
+                    chat_template_kwargs={"enable_thinking": False},
+                )
+            except TypeError:
+                result = llm.create_chat_completion(**kwargs)
         except Exception as exc:
             msg = str(exc)
             if "exceed context" in msg.lower() or "context window" in msg.lower():
@@ -263,7 +272,7 @@ class GgufClient:
 
         choice = (result.get("choices") or [{}])[0]
         message = choice.get("message") or {}
-        return (message.get("content") or "").strip()
+        return strip_thinking(message.get("content") or "")
 
     def summarize(self, text: str, *, instruction: str) -> str:
         messages = [

@@ -1,0 +1,4 @@
+{
+  "compute_mode": "gpu",
+  "gpu_layers": 24
+}
