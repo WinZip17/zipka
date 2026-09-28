@@ -106,10 +106,26 @@ class MemoryStore:
             {"ts": _utc_now(), "kind": kind, **detail},
         )
 
-    def add_chat(self, role: str, content: str) -> None:
-        self.append_jsonl(
-            self.chat_path, {"ts": _utc_now(), "role": role, "content": content}
-        )
+    def add_chat(
+        self,
+        role: str,
+        content: str,
+        *,
+        reply_to: dict[str, Any] | None = None,
+    ) -> None:
+        row: dict[str, Any] = {
+            "ts": _utc_now(),
+            "role": role,
+            "content": content,
+        }
+        if reply_to:
+            row["reply_to"] = {
+                "role": reply_to.get("role"),
+                "content": str(reply_to.get("content") or "")[:4000],
+            }
+            if reply_to.get("ts"):
+                row["reply_to"]["ts"] = reply_to["ts"]
+        self.append_jsonl(self.chat_path, row)
 
     def recent_chat(self, limit: int = 20) -> list[dict[str, str]]:
         chunk = self.chat_history(limit=limit)
@@ -129,13 +145,14 @@ class MemoryStore:
                     if not line:
                         continue
                     row = json.loads(line)
-                    rows.append(
-                        {
-                            "role": row.get("role", "assistant"),
-                            "content": row.get("content", ""),
-                            "ts": row.get("ts"),
-                        }
-                    )
+                    item: dict[str, Any] = {
+                        "role": row.get("role", "assistant"),
+                        "content": row.get("content", ""),
+                        "ts": row.get("ts"),
+                    }
+                    if isinstance(row.get("reply_to"), dict):
+                        item["reply_to"] = row["reply_to"]
+                    rows.append(item)
         total = len(rows)
         if before is None:
             end = total
@@ -148,6 +165,7 @@ class MemoryStore:
                 "role": row["role"],
                 "content": row["content"],
                 "ts": row.get("ts"),
+                **({"reply_to": row["reply_to"]} if row.get("reply_to") else {}),
             }
             for i, row in enumerate(rows[start:end])
         ]

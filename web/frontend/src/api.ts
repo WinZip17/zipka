@@ -2,6 +2,11 @@ export type ChatMessage = {
   role: string;
   content: string;
   ts?: string | null;
+  reply_to?: {
+    role?: string;
+    content?: string;
+    ts?: string | null;
+  } | null;
 };
 
 export type HistoryResponse = {
@@ -186,11 +191,27 @@ export async function fetchHistory(opts: {
   return parseJson(res);
 }
 
-export async function sendChat(message: string): Promise<{ reply?: string; detail?: string }> {
+export type ReplyContextItem = {
+  role: "user" | "assistant";
+  content: string;
+  ts?: string | null;
+};
+
+export async function sendChat(
+  message: string,
+  opts?: {
+    reply_to?: ReplyContextItem | null;
+    reply_chain?: ReplyContextItem[] | null;
+  },
+): Promise<{ reply?: string; detail?: string }> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({
+      message,
+      reply_to: opts?.reply_to || undefined,
+      reply_chain: opts?.reply_chain?.length ? opts.reply_chain : undefined,
+    }),
   });
   const data = await parseJson<{ reply?: string; detail?: string }>(res);
   if (!res.ok) throw new Error(data.detail || `Ошибка чата (${res.status})`);

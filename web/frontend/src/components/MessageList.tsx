@@ -1,7 +1,10 @@
 import { useEffect, useRef } from "react";
+import ReplyIcon from "@mui/icons-material/Reply";
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
+import IconButton from "@mui/material/IconButton";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 
 export type Bubble = {
@@ -9,6 +12,11 @@ export type Bubble = {
   who: "user" | "bot";
   text: string;
   at?: string | null;
+  replyToId?: string | null;
+  replyTo?: {
+    who: "user" | "bot";
+    text: string;
+  } | null;
 };
 
 type Props = {
@@ -17,6 +25,7 @@ type Props = {
   loadingOlder: boolean;
   onLoadOlder: () => void;
   thinking?: string | null;
+  onReply?: (bubble: Bubble) => void;
 };
 
 function formatMessageTime(iso?: string | null): string {
@@ -46,12 +55,19 @@ function formatMessageTime(iso?: string | null): string {
   return `${date} ${time}`;
 }
 
+function previewText(text: string, max = 90): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  if (one.length <= max) return one;
+  return `${one.slice(0, max - 1)}…`;
+}
+
 export function MessageList({
   messages,
   hasMore,
   loadingOlder,
   onLoadOlder,
   thinking,
+  onReply,
 }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -114,29 +130,86 @@ export function MessageList({
               border: m.who === "bot" ? 1 : 0,
               borderColor: "divider",
               flexShrink: 0,
+              position: "relative",
+              "&:hover .zipka-reply-btn": { opacity: 1 },
             }}
           >
+            {m.replyTo && (
+              <Box
+                sx={{
+                  mb: 1,
+                  px: 1,
+                  py: 0.75,
+                  borderRadius: 2,
+                  borderLeft: 3,
+                  borderColor: "primary.main",
+                  bgcolor: "rgba(0,0,0,0.22)",
+                }}
+              >
+                <Typography
+                  variant="caption"
+                  sx={{
+                    display: "block",
+                    color: "primary.light",
+                    fontWeight: 700,
+                    mb: 0.25,
+                  }}
+                >
+                  {m.replyTo.who === "user" ? "ты" : "Зипка"}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{ color: "text.secondary", display: "block" }}
+                >
+                  {previewText(m.replyTo.text, 120)}
+                </Typography>
+              </Box>
+            )}
             <Typography component="div" variant="body2" sx={{ color: "text.primary" }}>
               {m.text}
             </Typography>
-            {when && (
-              <Typography
-                component="div"
-                variant="caption"
-                title={m.at ? new Date(m.at).toLocaleString("ru-RU") : undefined}
-                sx={{
-                  mt: 0.75,
-                  display: "block",
-                  textAlign: m.who === "user" ? "right" : "left",
-                  color: "text.secondary",
-                  opacity: 0.85,
-                  fontSize: "0.7rem",
-                  lineHeight: 1,
-                }}
-              >
-                {when}
-              </Typography>
-            )}
+            <Box
+              sx={{
+                mt: 0.75,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: m.who === "user" ? "flex-end" : "flex-start",
+                gap: 0.5,
+              }}
+            >
+              {when && (
+                <Typography
+                  component="div"
+                  variant="caption"
+                  title={m.at ? new Date(m.at).toLocaleString("ru-RU") : undefined}
+                  sx={{
+                    color: "text.secondary",
+                    opacity: 0.85,
+                    fontSize: "0.7rem",
+                    lineHeight: 1,
+                  }}
+                >
+                  {when}
+                </Typography>
+              )}
+              {onReply && (
+                <Tooltip title="Ответить">
+                  <IconButton
+                    className="zipka-reply-btn"
+                    size="small"
+                    onClick={() => onReply(m)}
+                    sx={{
+                      opacity: { xs: 0.85, sm: 0.35 },
+                      p: 0.35,
+                      color: "text.secondary",
+                      "&:hover": { color: "primary.main", bgcolor: "transparent" },
+                    }}
+                  >
+                    <ReplyIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
           </Box>
         );
       })}

@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import CloseIcon from "@mui/icons-material/Close";
+import ReplyIcon from "@mui/icons-material/Reply";
 import SendIcon from "@mui/icons-material/Send";
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
@@ -11,18 +12,40 @@ import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { FILE_ACCEPT } from "../api";
-
+import type { Bubble } from "./MessageList";
 
 type Props = {
   disabled?: boolean;
   stagedFile: File | null;
   onStageFile: (file: File | null) => void;
   onSend: (message: string) => void;
+  replyTo?: Bubble | null;
+  onClearReply?: () => void;
 };
 
-export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
+function previewText(text: string, max = 100): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  if (one.length <= max) return one;
+  return `${one.slice(0, max - 1)}…`;
+}
+
+export function Composer({
+  disabled,
+  stagedFile,
+  onStageFile,
+  onSend,
+  replyTo,
+  onClearReply,
+}: Props) {
   const [text, setText] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (replyTo) {
+      inputRef.current?.focus();
+    }
+  }, [replyTo?.id]);
 
   const submit = () => {
     if (disabled) return;
@@ -33,6 +56,54 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
 
   return (
     <Box sx={{ borderTop: 1, borderColor: "divider", flexShrink: 0 }}>
+      {replyTo && (
+        <Box
+          sx={{
+            px: 1.5,
+            pt: 1.25,
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 1,
+          }}
+        >
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              px: 1.25,
+              py: 0.85,
+              borderRadius: 2,
+              borderLeft: 3,
+              borderColor: "primary.main",
+              bgcolor: "#16201b",
+            }}
+          >
+            <Stack direction="row" spacing={0.75} sx={{ mb: 0.35, alignItems: "center" }}>
+              <ReplyIcon sx={{ fontSize: 14, color: "primary.main" }} />
+              <Typography
+                variant="caption"
+                sx={{ color: "primary.light", fontWeight: 700 }}
+              >
+                Ответ · {replyTo.who === "user" ? "ты" : "Зипка"}
+              </Typography>
+            </Stack>
+            <Typography
+              variant="caption"
+              sx={{ color: "text.secondary", display: "block" }}
+            >
+              {previewText(replyTo.text)}
+            </Typography>
+          </Box>
+          <IconButton
+            size="small"
+            onClick={() => onClearReply?.()}
+            sx={{ color: "text.secondary", mt: 0.25 }}
+            aria-label="Снять ответ"
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      )}
       {stagedFile && (
         <Box sx={{ px: 1.5, pt: 1.25 }}>
           <Chip
@@ -96,11 +167,16 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
           }}
         >
           <InputBase
+            inputRef={inputRef}
             fullWidth
             multiline
             minRows={1}
             maxRows={6}
-            placeholder="Сообщение… Enter — отправить, Shift+Enter — новая строка"
+            placeholder={
+              replyTo
+                ? "Продолжить эту ветку… Enter — отправить"
+                : "Сообщение… Enter — отправить, Shift+Enter — новая строка"
+            }
             value={text}
             disabled={disabled}
             onChange={(e) => setText(e.target.value)}
@@ -138,7 +214,9 @@ export function Composer({ disabled, stagedFile, onStageFile, onSend }: Props) {
         color="text.secondary"
         sx={{ display: "block", px: 1.5, pb: 1, mt: -0.5 }}
       >
-        Текст сообщения = комментарий к файлу
+        {replyTo
+          ? "Ответ подхватит эту ветку как приоритетный контекст"
+          : "Текст сообщения = комментарий к файлу"}
       </Typography>
     </Box>
   );

@@ -275,7 +275,12 @@ class Zipka:
         reloaded = self._reload_llm()
         return {"ok": True, **reloaded}
 
-    def build_messages(self, user_text: str) -> list[dict[str, str]]:
+    def build_messages(
+        self,
+        user_text: str,
+        *,
+        reply_context: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, str]]:
         note_limit = 4 if getattr(self.llm, "backend", "") == "gguf" else 8
         hist_limit = 6 if getattr(self.llm, "backend", "") == "gguf" else 16
         # короткие заметки: длинные выжимки книг иначе раздувают ctx и тормозят чат
@@ -310,16 +315,53 @@ class Zipka:
                 "\nГлаза сейчас выключены. Если просят посмотреть — скажи включить "
                 "глаза в UI или напиши «включи глаза», либо сама попроси включить."
             )
+        if reply_context:
+            system += (
+                "\n\nПРИОРИТЕТНЫЙ КОНТЕКСТ: пользователь нажал «ответить» на старое "
+                "сообщение и продолжает ИМЕННО ту ветку разговора. "
+                "Опирайся на цепочку ниже сильнее, чем на недавний общий чат. "
+                "Не меняй тему на последние сообщения, если они не про это.\n"
+                "Цепочка (от более раннего к сообщению, на которое ответили):\n"
+            )
+            for i, item in enumerate(reply_context, 1):
+                role = item.get("role") or "user"
+                who = "USER" if role == "user" else "ZIPKA"
+                content = str(item.get("content") or "").strip()[:2500]
+                if not content:
+                    continue
+                system += f"{i}. [{who}]: {content}\n"
+
         history = self.memory.recent_chat(limit=hist_limit)
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
         messages.extend(history)
-        messages.append({"role": "user", "content": user_text})
+        if reply_context:
+            target = reply_context[-1]
+            preview = str(target.get("content") or "")[:400]
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"(Ответ на сообщение: «{preview}»)\n\n{user_text}"
+                    ),
+                }
+            )
+        else:
+            messages.append({"role": "user", "content": user_text})
         return messages
 
-    def chat(self, user_text: str, *, auto_soft: bool = True) -> str:
+    def chat(
+        self,
+        user_text: str,
+        *,
+        auto_soft: bool = True,
+        reply_to: dict[str, Any] | None = None,
+        reply_chain: list[dict[str, Any]] | None = None,
+    ) -> str:
         text = user_text.strip()
         if not text:
             return "Пусто. Скажи что-нибудь."
+
+        reply_context = self._normalize_reply_context(reply_chain, reply_to)
 
         if self.safety.is_blocked(text):
             reply = self.safety.refusal()
@@ -440,13 +482,17 @@ class Zipka:
         except Exception:
             pass
 
-        messages = self.build_messages(text)
+        messages = self.build_messages(text, reply_context=reply_context)
         try:
             reply = self.llm.chat(messages)
         except LlmError as exc:
             self.user._turn_alert = None
             return str(exc)
-        self._remember_turn(text, reply)
+        self._remember_turn(
+            text,
+            reply,
+            reply_to=(reply_context[-1] if reply_context else None),
+        )
         self.mind.bump_turn()
         self.proactive.bump_turn()
 
@@ -916,33 +962,85 @@ class Zipka:
                 "from_chat": True,
             },
         )
-        try:
-            comment = self.comment_eyes(desc)
-        except Exception:
-            comment = None
-
-        # Ответ характером Зипки, с фактом «ты реально видела»
-        if self.llm.is_available():
-            messages = self.build_messages(text)
-            messages[0]["content"] += (
-                f"\n\nФАКТ: ты только что посмотрела через {where}. "
-                f"Описание кадра (это правда, не выдумка):\n{desc}\n"
-                "Ответь от первого лица: что видишь, своими словами. "
-                "Не отрицай зрение. Не говори, что это пример или фантазия."
-            )
+        # профиль — в фоне; без sensor_comment (он клеил второе «я» через —)
+        def _observe() -> None:
             try:
-                reply = self.llm.chat(messages)
-            except LlmError:
-                reply = f"Смотрю… На {where}: {desc}"
-        else:
-            reply = f"Смотрю… На {where}: {desc}"
+                self.user.observe_sensor("eyes", desc)
+            except Exception:
+                pass
 
-        if comment:
-            reply = self.proactive.attach(reply, comment)
+        threading.Thread(
+            target=_observe, name="zipka-eyes-observe", daemon=True
+        ).start()
+
+        # Ответ = факт кадра. Чат-модель часто игнорирует vision и врёт «не вижу»,
+        # поэтому не даём ей свободный диалог — только короткая перефразировка
+        # с жёстким запретом, иначе сырое описание Moondream.
+        reply = self._voice_look(desc, where=where, user_text=text)
         path = snap.get("path")
         if path:
             reply += f"\n\n_(кадр: `{path}`)_"
         return reply
+
+    def _voice_look(self, desc: str, *, where: str, user_text: str) -> str:
+        """Оформить описание кадра от лица Зипки без отрицания зрения."""
+        fallback = f"Смотрю в {where}…\n\n{desc.strip()}"
+        if not desc.strip() or not self.llm.is_available():
+            return fallback
+        try:
+            raw = self.llm.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты Зипка. Тебе УЖЕ дали реальное описание кадра с камеры. "
+                            "Перескажи его от первого лица коротко и живо (1–4 предложения). "
+                            "Можно чуть характера, но факты только из описания. "
+                            "СТРОГО ЗАПРЕЩЕНО: говорить что не видишь / нет глаз / "
+                            "ты текстовая модель; предлагать «представить»; "
+                            "предлагать написать код распознавания; "
+                            "выдумывать то, чего нет в описании; "
+                            "здороваться и менять тему."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Запрос: {user_text[:400]}\n"
+                            f"Источник: {where}\n"
+                            f"Описание кадра:\n{desc[:3500]}"
+                        ),
+                    },
+                ]
+            )
+        except Exception:
+            return fallback
+        if self._denies_vision(raw):
+            return fallback
+        return raw.strip() or fallback
+
+    @staticmethod
+    def _denies_vision(text: str) -> bool:
+        low = (text or "").lower()
+        markers = (
+            "не вижу",
+            "не могу видеть",
+            "не умею смотреть",
+            "нет глаз",
+            "не вижу напрямую",
+            "текстовая модель",
+            "текстовый модель",
+            "просто представить",
+            "могу просто представить",
+            "представить, что вижу",
+            "помогу с кодом",
+            "код для обработки",
+            "распознавания лиц",
+            "это не моя сильная",
+            "выдуманный пример",
+            "не реальная ситуация",
+        )
+        return any(m in low for m in markers)
 
     @staticmethod
     def _look_source(text: str) -> str | None:
@@ -1066,6 +1164,43 @@ class Zipka:
             raise LlmError(f"Локальный vision: {local_err}\n{hint}")
         raise LlmError(hint)
 
-    def _remember_turn(self, user_text: str, reply: str) -> None:
-        self.memory.add_chat("user", user_text)
+    def _remember_turn(
+        self,
+        user_text: str,
+        reply: str,
+        *,
+        reply_to: dict[str, Any] | None = None,
+    ) -> None:
+        self.memory.add_chat("user", user_text, reply_to=reply_to)
         self.memory.add_chat("assistant", reply)
+
+    @staticmethod
+    def _normalize_reply_context(
+        reply_chain: list[dict[str, Any]] | None,
+        reply_to: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Цепочка сообщений для приоритетного контекста (от раннего к цели)."""
+        raw = list(reply_chain or [])
+        if not raw and reply_to:
+            raw = [reply_to]
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            role = str(item.get("role") or "user").strip().lower()
+            if role in {"bot", "assistant", "zipka"}:
+                role = "assistant"
+            else:
+                role = "user"
+            key = f"{role}:{content[:200]}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"role": role, "content": content[:4000]})
+            if len(out) >= 12:
+                break
+        return out

@@ -23,6 +23,44 @@ function roleToWho(role: string): "user" | "bot" {
   return role === "user" ? "user" : "bot";
 }
 
+function whoToRole(who: "user" | "bot"): "user" | "assistant" {
+  return who === "user" ? "user" : "assistant";
+}
+
+function buildReplyChain(
+  messages: Bubble[],
+  target: Bubble,
+): { role: "user" | "assistant"; content: string; ts?: string | null }[] {
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const ancestors: Bubble[] = [];
+  let cur: Bubble | undefined = target;
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    ancestors.unshift(cur);
+    cur = cur.replyToId ? byId.get(cur.replyToId) : undefined;
+  }
+
+  // + пара сообщений сразу после цели (продолжение той же ветки во времени)
+  const idx = messages.findIndex((m) => m.id === target.id);
+  const follow: Bubble[] = [];
+  if (idx >= 0) {
+    for (let i = idx + 1; i < Math.min(messages.length, idx + 5); i += 1) {
+      const m = messages[i];
+      if (seen.has(m.id)) continue;
+      // если это уже чужой reply на другое — всё равно даём хронологический хвост
+      follow.push(m);
+      seen.add(m.id);
+    }
+  }
+
+  return [...ancestors, ...follow].map((m) => ({
+    role: whoToRole(m.who),
+    content: m.text,
+    ts: m.at ?? null,
+  }));
+}
+
 export default function App() {
   const idBase = useId();
   const seq = useRef(0);
@@ -37,21 +75,35 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false);
   const [oldestIndex, setOldestIndex] = useState<number | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [replyTo, setReplyTo] = useState<Bubble | null>(null);
   const loadingOlderRef = useRef(false);
   const hasMoreRef = useRef(false);
   const oldestRef = useRef<number | null>(null);
 
-  const addBubble = useCallback((text: string, who: "user" | "bot", at?: string | null) => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `${idBase}-${++seq.current}`,
-        who,
-        text,
-        at: at ?? new Date().toISOString(),
+  const addBubble = useCallback(
+    (
+      text: string,
+      who: "user" | "bot",
+      at?: string | null,
+      meta?: {
+        replyToId?: string | null;
+        replyTo?: Bubble["replyTo"];
       },
-    ]);
-  }, [idBase]);
+    ) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${idBase}-${++seq.current}`,
+          who,
+          text,
+          at: at ?? new Date().toISOString(),
+          replyToId: meta?.replyToId ?? null,
+          replyTo: meta?.replyTo ?? null,
+        },
+      ]);
+    },
+    [idBase],
+  );
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -82,6 +134,12 @@ export default function App() {
           who: roleToWho(m.role),
           text: m.content,
           at: m.ts ?? null,
+          replyTo: m.reply_to?.content
+            ? {
+                who: roleToWho(m.reply_to.role || "assistant"),
+                text: m.reply_to.content,
+              }
+            : null,
         })),
       );
     } catch {
@@ -109,6 +167,12 @@ export default function App() {
         who: roleToWho(m.role),
         text: m.content,
         at: m.ts ?? null,
+        replyTo: m.reply_to?.content
+          ? {
+              who: roleToWho(m.reply_to.role || "assistant"),
+              text: m.reply_to.content,
+            }
+          : null,
       }));
       setMessages((prev) => [...older, ...prev]);
     } catch {
@@ -152,6 +216,8 @@ export default function App() {
   const onSend = async (message: string) => {
     if (busy) return;
     setBusy(true);
+    const activeReply = replyTo;
+    setReplyTo(null);
     try {
       if (stagedFile) {
         const file = stagedFile;
@@ -172,10 +238,27 @@ export default function App() {
         }
         return;
       }
-      addBubble(message, "user");
+      const chain = activeReply
+        ? buildReplyChain(messages, activeReply)
+        : undefined;
+      addBubble(message, "user", null, {
+        replyToId: activeReply?.id ?? null,
+        replyTo: activeReply
+          ? { who: activeReply.who, text: activeReply.text }
+          : null,
+      });
       setThinking("Вникаю…");
       try {
-        const data = await sendChat(message);
+        const data = await sendChat(message, {
+          reply_to: activeReply
+            ? {
+                role: whoToRole(activeReply.who),
+                content: activeReply.text,
+                ts: activeReply.at ?? null,
+              }
+            : null,
+          reply_chain: chain,
+        });
         addBubble(data.reply || "(пустой ответ)", "bot");
         void refreshStatus();
       } catch (err) {
@@ -267,12 +350,15 @@ export default function App() {
             loadingOlder={loadingOlder}
             onLoadOlder={() => void loadOlderHistory()}
             thinking={thinking}
+            onReply={(b) => setReplyTo(b)}
           />
           <Composer
             disabled={busy}
             stagedFile={stagedFile}
             onStageFile={setStagedFile}
             onSend={(msg) => void onSend(msg)}
+            replyTo={replyTo}
+            onClearReply={() => setReplyTo(null)}
           />
         </Paper>
 

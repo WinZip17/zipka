@@ -23,6 +23,14 @@ agent = Zipka()
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1)
+    reply_to: dict | None = Field(
+        default=None,
+        description="Сообщение, на которое отвечают: {role, content, ts?}",
+    )
+    reply_chain: list[dict] | None = Field(
+        default=None,
+        description="Цепочка контекста от раннего к целевому сообщению",
+    )
 
 
 class ActionIn(BaseModel):
@@ -129,7 +137,11 @@ def api_set_models(body: ModelsIn) -> dict:
 
 @app.post("/api/chat")
 def api_chat(body: ChatIn) -> dict:
-    reply = agent.chat(body.message)
+    reply = agent.chat(
+        body.message,
+        reply_to=body.reply_to,
+        reply_chain=body.reply_chain,
+    )
     return {"reply": reply, "approve_phrase": APPROVE_PHRASE}
 
 
