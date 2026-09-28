@@ -297,6 +297,19 @@ class Zipka:
             "Также можно дать URL статьи (https://…) со словами «прочитай/прочти» — "
             "Зипка скачает страницу и сделает выжимку."
         )
+        if self.eyes.enabled:
+            system += (
+                "\nГлаза СЕЙЧАС ВКЛЮЧЕНЫ (веб-камера активна). "
+                "Если просят посмотреть / что видишь — ты реально смотришь "
+                "(система даст описание кадра). "
+                "Запрещено отнекиваться: «не умею смотреть», «у меня нет глаз», "
+                "«я текстовая модель», «не вижу напрямую»."
+            )
+        else:
+            system += (
+                "\nГлаза сейчас выключены. Если просят посмотреть — скажи включить "
+                "глаза в UI или напиши «включи глаза», либо сама попроси включить."
+            )
         history = self.memory.recent_chat(limit=hist_limit)
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
         messages.extend(history)
@@ -356,6 +369,11 @@ class Zipka:
         if book_reply is not None:
             self._remember_turn(text, book_reply)
             return book_reply
+
+        look_reply = self.try_look_from_message(text)
+        if look_reply is not None:
+            self._remember_turn(text, look_reply)
+            return look_reply
 
         if self.hard.is_approve(text):
             if not self.hard.has_pending():
@@ -835,6 +853,148 @@ class Zipka:
 
     def rare_ping(self, *, force: bool = False) -> str | None:
         return self.proactive.maybe_rare_ping(force=force)
+
+    def try_look_from_message(self, text: str) -> str | None:
+        """Если просят посмотреть — кадр + Moondream/Ollama, ответ от лица Зипки."""
+        source = self._look_source(text)
+        if source is None:
+            # «включи глаза» / «выключи глаза»
+            low = text.lower()
+            if re.search(r"(?i)включ\w*\s+глаз|eyes\s+on|открой\s+камер", low):
+                try:
+                    return self.eyes.on()
+                except Exception as exc:
+                    return f"Не смогла включить глаза: {exc}"
+            if re.search(r"(?i)выключ\w*\s+глаз|eyes\s+off|закрой\s+камер", low):
+                try:
+                    return self.eyes.off()
+                except Exception as exc:
+                    return f"Не смогла выключить глаза: {exc}"
+            return None
+
+        if not self.eyes.enabled:
+            try:
+                self.eyes.on()
+            except Exception as exc:
+                return (
+                    f"Хочу посмотреть, но камера не открылась: {exc}. "
+                    "Включи глаза кнопкой в панели или проверь устройство."
+                )
+
+        try:
+            if source == "screen":
+                snap = self.eyes.screen()
+                where = "экране"
+            elif source == "window":
+                snap = self.eyes.window()
+                where = "активном окне"
+            else:
+                snap = self.eyes.snap()
+                where = "камере"
+        except Exception as exc:
+            return f"Не смогла сделать снимок ({source}): {exc}"
+
+        vision_prompt = (
+            "Опиши, что видно на кадре, подробно но без воды, по-русски. "
+            f"Запрос пользователя: {text[:500]}"
+        )
+        try:
+            desc = self.describe_image(snap["image_b64"], prompt=vision_prompt)
+        except LlmError as exc:
+            return (
+                f"Снимок есть (`{snap.get('path')}`), но описание не вышло:\n{exc}"
+            )
+        except Exception as exc:
+            return f"Снимок есть (`{snap.get('path')}`), но vision упал: {exc}"
+
+        self.memory.add_note(
+            "eyes",
+            desc,
+            meta={
+                "path": snap.get("path"),
+                "source": snap.get("source", source),
+                "from_chat": True,
+            },
+        )
+        try:
+            comment = self.comment_eyes(desc)
+        except Exception:
+            comment = None
+
+        # Ответ характером Зипки, с фактом «ты реально видела»
+        if self.llm.is_available():
+            messages = self.build_messages(text)
+            messages[0]["content"] += (
+                f"\n\nФАКТ: ты только что посмотрела через {where}. "
+                f"Описание кадра (это правда, не выдумка):\n{desc}\n"
+                "Ответь от первого лица: что видишь, своими словами. "
+                "Не отрицай зрение. Не говори, что это пример или фантазия."
+            )
+            try:
+                reply = self.llm.chat(messages)
+            except LlmError:
+                reply = f"Смотрю… На {where}: {desc}"
+        else:
+            reply = f"Смотрю… На {where}: {desc}"
+
+        if comment:
+            reply = self.proactive.attach(reply, comment)
+        path = snap.get("path")
+        if path:
+            reply += f"\n\n_(кадр: `{path}`)_"
+        return reply
+
+    @staticmethod
+    def _look_source(text: str) -> str | None:
+        """cam | screen | window | None — если не просят смотреть."""
+        low = text.lower().strip()
+        # явные команды
+        if re.search(r"(?i)\beyes\s+(snap|camera|cam)\b", low):
+            return "cam"
+        if re.search(r"(?i)\beyes\s+(screen|monitor)\b", low):
+            return "screen"
+        if re.search(r"(?i)\beyes\s+(window|win)\b", low):
+            return "window"
+
+        screen_hit = bool(
+            re.search(
+                r"(?i)(экран|монитор|скрин|screenshot|что\s+на\s+экране)",
+                low,
+            )
+        )
+        window_hit = bool(
+            re.search(r"(?i)(активн\w*\s+окн|что\s+в\s+окне|окно\s+впереди)", low)
+        )
+        look_hit = bool(
+            re.search(
+                r"(?i)("
+                r"что\s+(ты\s+)?видишь|"
+                r"что\s+там\s+видишь|"
+                r"посмотри|"
+                r"взгляни|"
+                r"глянь|"
+                r"видишь\s+меня|"
+                r"посмотри\s+на\s+меня|"
+                r"кадр\s+(с\s+)?камер|"
+                r"сним(?:ок|и)\s+(с\s+)?камер|"
+                r"открой\s+глаза\s+и\s+посмотри|"
+                r"используй\s+камер|"
+                r"посмотр\w*\s+в\s+камер"
+                r")",
+                low,
+            )
+        )
+        if not (look_hit or screen_hit or window_hit):
+            return None
+        if screen_hit and not look_hit:
+            return "screen"
+        if window_hit and not look_hit:
+            return "window"
+        if screen_hit:
+            return "screen"
+        if window_hit:
+            return "window"
+        return "cam"
 
     def comment_eyes(self, description: str) -> str | None:
         try:
