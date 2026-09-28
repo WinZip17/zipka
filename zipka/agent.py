@@ -315,6 +315,12 @@ class Zipka:
                 "\nГлаза сейчас выключены. Если просят посмотреть — скажи включить "
                 "глаза в UI или напиши «включи глаза», либо сама попроси включить."
             )
+        system += (
+            "\nЕсли просят изменить файлы zipka/ или web/ — не присылай пример кода "
+            "«как будто уже сделала». Hard-evolve сам подготовит патч на approve "
+            "(«разрешаю правку кода»). В обычном чате не выдавай большие блоки кода "
+            "вместо реальной правки."
+        )
         if reply_context:
             system += (
                 "\n\nПРИОРИТЕТНЫЙ КОНТЕКСТ: пользователь нажал «ответить» на старое "
@@ -435,9 +441,10 @@ class Zipka:
         if self.hard.has_pending() and "патч" in text.lower():
             return self.hard.format_pending()
 
-        if self.hard.wants_code_change(text):
+        code_request = self._code_change_request(text)
+        if code_request:
             try:
-                self_edit, project = self.hard.resolve_patch_target(text)
+                self_edit, project = self.hard.resolve_patch_target(code_request)
             except RuntimeError as exc:
                 reply = str(exc)
                 self._remember_turn(text, reply)
@@ -448,7 +455,7 @@ class Zipka:
                 ctx = "\n".join(n.get("text", "") for n in notes)
             try:
                 pending = self.hard.propose(
-                    text,
+                    code_request,
                     project_root=None if self_edit else project,
                     context=ctx,
                     self_edit=self_edit,
@@ -880,6 +887,54 @@ class Zipka:
                 except OSError:
                     continue
         return None
+
+    def _code_change_request(self, text: str) -> str | None:
+        """Текст для hard.propose или None, если это не запрос правок."""
+        if self.hard.wants_code_change(text):
+            return text
+
+        # короткое «давай / сделай / внеси» после плана с примером кода в чате
+        low = text.lower().strip()
+        affirm = bool(
+            re.match(
+                r"^(да|ок|хорошо|ага|угу|давай|сделай|внеси|реализуй|добавь|"
+                r"примени|поехали)\b",
+                low,
+            )
+            or "как предложила" in low
+            or "как ты написала" in low
+            or "этот код" in low
+            or "в свой код" in low
+        )
+        if not affirm:
+            return None
+
+        hist = self.memory.recent_chat(limit=6)
+        last_bot = ""
+        for m in reversed(hist):
+            if m.get("role") == "assistant":
+                last_bot = m.get("content") or ""
+                break
+        if not last_bot:
+            return None
+        markers = (
+            "```",
+            "zipka/",
+            "web/",
+            "detect_faces",
+            "eyes.py",
+            "правк",
+            "патч",
+            "добавлю в",
+        )
+        if not any(m in last_bot.lower() or m in last_bot for m in markers):
+            return None
+        return (
+            f"{text}\n\n"
+            "Контекст: реализуй план из предыдущего ответа Зипки как hard-evolve "
+            "патч (JSON files[].edits), не текст с примером.\n"
+            f"План:\n{last_bot[:3500]}"
+        )
 
     @staticmethod
     def _wants_soft_evolve(text: str) -> bool:

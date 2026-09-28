@@ -162,10 +162,12 @@ class HardEvolve:
             "self-modify",
             "измени модуль",
             "добавь в код",
+            "добавь в свой код",
             "hard evolve",
             "перепиши файл",
             "предложи правки",
             "внеси правки",
+            "внеси эти правки",
             "поправь проект",
             "измени проект",
             "сделай правки",
@@ -179,6 +181,16 @@ class HardEvolve:
             "сама себя",
             "себя поправь",
             "поправь себя",
+            "реализуй в коде",
+            "реализуй это",
+            "внедри в код",
+            "примени правк",
+            "подготовь патч",
+            "сделай патч",
+            "добавь функцию",
+            "добавь метод",
+            "вызови её после",
+            "вызови ее после",
             "textarea",
             "текстареа",
             "поле ввода",
@@ -195,21 +207,12 @@ class HardEvolve:
         ]
         if any(k in lowered for k in keys):
             return True
-        # «поменяй … кнопку/цвет/в чате …» без магической фразы
-        change_verbs = (
-            "поменяй",
-            "измени",
-            "сделай",
-            "покрась",
-            "замени",
-            "поставь",
-            "убери",
-            "добавь",
-            "сдвинь",
-            "увеличь",
-            "уменьши",
-            "переименуй",
-        )
+
+        # путь к файлу репо + глагол правки → hard-evolve (не болтовня с примером)
+        if self._mentions_repo_code_path(lowered) and self._has_change_verb(lowered):
+            return True
+
+        change_verbs = self._change_verbs()
         ui_targets = (
             "кнопк",
             "цвет",
@@ -226,15 +229,72 @@ class HardEvolve:
             "тема",
             "mui",
             "свой код",
+            "своего кода",
             "зипк",
+            "zipka",
             "web/",
             "layout",
             "иконк",
             "шрифт",
+            "eyes.py",
+            "vision.py",
+            "agent.py",
+            "detect_faces",
+            "самообуч",
         )
         return any(v in lowered for v in change_verbs) and any(
             t in lowered for t in ui_targets
         )
+
+    @staticmethod
+    def _change_verbs() -> tuple[str, ...]:
+        return (
+            "поменяй",
+            "измени",
+            "сделай",
+            "покрась",
+            "замени",
+            "поставь",
+            "убери",
+            "добавь",
+            "добавлю",
+            "сдвинь",
+            "увеличь",
+            "уменьши",
+            "переименуй",
+            "реализуй",
+            "внедри",
+            "подключи",
+            "пропиши",
+            "допиши",
+            "вставь",
+            "вызови",
+        )
+
+    def _has_change_verb(self, lowered: str) -> bool:
+        return any(v in lowered for v in self._change_verbs())
+
+    @staticmethod
+    def _mentions_repo_code_path(lowered: str) -> bool:
+        if re.search(
+            r"(?:zipka|web)[/\\][\w./\\-]+\.(?:py|ts|tsx|js|jsx|css|json|yaml|yml|toml|md)",
+            lowered,
+        ):
+            return True
+        if re.search(r"\b[\w-]+\.(?:py|tsx|ts|jsx)\b", lowered) and any(
+            k in lowered
+            for k in (
+                "zipka",
+                "sensors",
+                "frontend",
+                "components",
+                "eyes",
+                "vision",
+                "agent",
+            )
+        ):
+            return True
+        return False
 
     def wants_self_edit(self, text: str) -> bool:
         """Явный запрос правок самой Зипки."""
