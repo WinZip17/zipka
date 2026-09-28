@@ -37,19 +37,20 @@ _FILE_EXTS = "|".join(
     re.escape(ext.lstrip(".")) for ext in sorted(READABLE_SUFFIXES | ARCHIVE_SUFFIXES)
 )
 _PATH_RE = re.compile(
-    rf'(?P<q>["\'])(?P<p1>[^"\']+\.(?:{_FILE_EXTS}))(?P=q)'
-    rf'|(?P<p2>(?:[A-Za-z]:[\\/]|[\\/])[^\s"\']+\.(?:{_FILE_EXTS}))',
+    rf'(?P<q>["\'])(?P<p1>[^"\']+\.(?:{_FILE_EXTS})(?![A-Za-z0-9]))(?P=q)'
+    rf'|(?P<p2>(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|/(?!/)|\\)'
+    rf'[^\s"\']+\.(?:{_FILE_EXTS})(?![A-Za-z0-9]))',
     re.IGNORECASE,
 )
 _DIR_PATH_RE = re.compile(
-    rf'(?P<q>["\'])(?P<d1>(?:[A-Za-z]:[\\/]|[\\/])[^"\']+)(?P=q)'
-    rf'|(?P<d2>(?:[A-Za-z]:[\\/]|[\\/])[^\s"\']+)',
+    rf'(?P<q>["\'])(?P<d1>(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|/(?!/)|\\)[^"\']+)(?P=q)'
+    rf'|(?P<d2>(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|/(?!/)|\\)[^\s"\']+)',
     re.IGNORECASE,
 )
 _READ_INTENT = re.compile(
-    r"(прочитай|прочти|прочесть|прочитать|читай|открой\s+книг|"
-    r"прочитай\s+книг|read\s+(?:the\s+)?book|read\s+file|"
-    r"изучи(?:\s+папк\w*)?|разбери|проанализируй|изучить|study|analyze|"
+    r"(прочитай|прочти|прочесть|прочитать|читай|открой\s+(?:книг|стать|ссылк|url|страниц)|"
+    r"прочитай\s+(?:книг|стать|ссылк|url)|read\s+(?:the\s+)?(?:book|article|page|url|link)|"
+    r"изучи(?:\s+папк\w*|те)?|разбери|проанализируй|изучить|study|analyze|"
     r"обучись\s+на|обуч\w*\s+по\s+папк|"
     r"что\s+в\s+архиве|список\s+(?:файлов\s+)?(?:в\s+)?архиве|"
     r"list\s+archive)",
@@ -244,7 +245,12 @@ class Zipka:
     def build_messages(self, user_text: str) -> list[dict[str, str]]:
         note_limit = 4 if getattr(self.llm, "backend", "") == "gguf" else 8
         hist_limit = 6 if getattr(self.llm, "backend", "") == "gguf" else 16
-        notes = [n["text"] for n in self.memory.recent_notes(limit=note_limit)]
+        # короткие заметки: длинные выжимки книг иначе раздувают ctx и тормозят чат
+        note_cap = 350 if getattr(self.llm, "backend", "") == "gguf" else 500
+        notes = [
+            (n.get("text") or "")[:note_cap]
+            for n in self.memory.recent_notes(limit=note_limit)
+        ]
         system = self.persona.system_prompt(
             skills=self.memory.get_skills(),
             preferences=self.memory.get_preferences(),
@@ -254,7 +260,9 @@ class Zipka:
         )
         system += (
             "\nПользователь может дать путь к книге или исходному коду "
-            "(.py/.js/.ts/…), папке с кодом, zip/rar — или загрузить файл в web."
+            "(.py/.js/.ts/…), папке с кодом, zip/rar — или загрузить файл в web. "
+            "Также можно дать URL статьи (https://…) со словами «прочитай/прочти» — "
+            "Зипка скачает страницу и сделает выжимку."
         )
         history = self.memory.recent_chat(limit=hist_limit)
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -304,6 +312,12 @@ class Zipka:
             )
             self._remember_turn(text, reply)
             return reply
+
+        # URL раньше файлов: иначе https://habr.com ловится как s:\habr.c
+        url_reply = self.try_read_url_from_message(text)
+        if url_reply is not None:
+            self._remember_turn(text, url_reply)
+            return url_reply
 
         book_reply = self.try_read_from_message(text)
         if book_reply is not None:
@@ -415,6 +429,72 @@ class Zipka:
 
         return reply
 
+    def try_read_url_from_message(self, text: str) -> str | None:
+        """Прочитать https-ссылку из чата (статья и т.п.)."""
+        urls = self.net.extract_urls(text)
+        if not urls:
+            return None
+
+        has_intent = bool(_READ_INTENT.search(text))
+        stripped = text.strip()
+        # голое сообщение = одна ссылка (или «ссылка + чуть текста»)
+        bare_url = False
+        if len(urls) == 1:
+            only = urls[0]
+            rest = stripped.replace(only, "").strip(" \t\r\n\"'.,;:!?")
+            bare_url = len(rest) < 8
+
+        if not has_intent and not bare_url:
+            return None
+
+        url = urls[0]
+        comment = self._extract_comment(text)
+        if comment:
+            comment = re.split(
+                r"\b(?:режим|mode|предложи\s+правк)\b",
+                comment,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0].strip() or None
+
+        try:
+            result = self.net.read_url(
+                url,
+                mode="chat",
+                enforce_allowlist=False,
+                comment=comment,
+            )
+        except Exception as exc:
+            return f"Не смогла прочитать ссылку `{url}`: {exc}"
+
+        title = result.get("title") or url
+        digest = result.get("digest_path") or "—"
+        preview = (result.get("summary") or "")[:2200]
+        comment_line = f"С учётом комментария: {comment}\n" if comment else ""
+        reply = (
+            f"Прочитала: {title}\n"
+            f"URL: `{result.get('url')}`\n"
+            f"{comment_line}"
+            f"Символов: {result.get('chars')}. Выжимка: `{digest}`\n\n"
+            f"{preview}"
+        )
+        try:
+            follow = self.proactive.study_followup(
+                source=str(result.get("url")),
+                digest=result.get("summary") or "",
+                kind="url",
+                comment=comment,
+            )
+            reply = self.proactive.attach(reply, follow)
+        except Exception:
+            pass
+        if len(urls) > 1:
+            reply += (
+                f"\n\n(В сообщении ещё {len(urls) - 1} ссылк"
+                f"{'а' if len(urls) == 2 else 'и'}; пока взяла первую.)"
+            )
+        return reply
+
     def try_read_from_message(self, text: str) -> str | None:
         path = self._extract_book_path(text)
         if not path:
@@ -491,7 +571,7 @@ class Zipka:
                 )
             comment_line = f"С учётом комментария: {comment}\n" if comment else ""
             digest_preview = (result.get("overview") or result.get("digest") or "")[
-                :1800
+                :1200
             ]
             reply = (
                 f"{verb}{inner}: `{path}`\n"
@@ -618,12 +698,19 @@ class Zipka:
 
     @staticmethod
     def _extract_book_path(text: str) -> Path | None:
-        match = _PATH_RE.search(text)
+        # Убираем URL, чтобы https://… не казались путём Windows (s:\habr.c)
+        scrubbed = re.sub(
+            r"https?://[^\s<>\"')\]]+",
+            " ",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+        match = _PATH_RE.search(scrubbed)
         if match:
             raw = match.group("p1") or match.group("p2")
             return Path(raw).expanduser()
 
-        stripped = text.strip().strip("\"'")
+        stripped = scrubbed.strip().strip("\"'")
         candidate = Path(stripped).expanduser()
         if candidate.suffix.lower() in (READABLE_SUFFIXES | ARCHIVE_SUFFIXES):
             return candidate
@@ -632,7 +719,7 @@ class Zipka:
 
         # Directory path inside a study/read sentence
         if _READ_INTENT.search(text):
-            for m in _DIR_PATH_RE.finditer(text):
+            for m in _DIR_PATH_RE.finditer(scrubbed):
                 raw = m.group("d1") or m.group("d2")
                 if not raw:
                     continue

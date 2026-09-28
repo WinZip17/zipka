@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     zipka_reflect_every: int = 8
     zipka_net_allowlist: str = (
         "ru.wikipedia.org,en.wikipedia.org,docs.python.org,"
-        "raw.githubusercontent.com,github.com"
+        "raw.githubusercontent.com,github.com,habr.com,cdn.habr.com,"
+        "medium.com,dev.to,stackoverflow.com,learn.microsoft.com"
     )
     zipka_net_max_bytes: int = 500_000
     zipka_whisper_model: str = "base"

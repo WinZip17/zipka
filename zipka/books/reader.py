@@ -300,7 +300,18 @@ class BookReader:
         if not text.strip():
             raise RuntimeError(f"Файл пуст или не прочитан: {path}")
 
-        chunks = self._chunk(text, size=3500)[:max_chunks]
+        if kind == "book":
+            return self._summarize_book(
+                text,
+                path=path,
+                source_label=source_label,
+                origin=origin,
+                archive_member=archive_member,
+                comment=comment,
+            )
+
+        # Код: несколько коротких проходов, но не больше 3 (было 6 — слишком медленно)
+        chunks = self._chunk(text, size=3500)[: max(1, min(int(max_chunks), 3))]
         summaries: list[str] = []
         for i, chunk in enumerate(chunks, 1):
             instruction = self._instruction(
@@ -308,18 +319,89 @@ class BookReader:
             )
             summary = self.llm.summarize(chunk, instruction=instruction)
             summaries.append(summary)
-            self.memory.add_note(
-                kind,
-                summary,
-                meta={
-                    "source": origin,
-                    "archive_member": archive_member,
-                    "chunk": i,
-                    "path": str(path),
-                    "comment": comment,
-                },
-            )
         digest = "\n\n".join(summaries)
+        # одна заметка, а не по куску — иначе раздувается system prompt
+        self.memory.add_note(
+            kind,
+            digest[:1800],
+            meta={
+                "source": origin,
+                "archive_member": archive_member,
+                "chunks": len(chunks),
+                "path": str(path),
+                "comment": comment,
+            },
+        )
+        return self._write_digest(
+            digest=digest,
+            origin=origin,
+            archive_member=archive_member,
+            source_label=source_label,
+            kind=kind,
+            comment=comment,
+            chunks=len(chunks),
+        )
+
+    def _summarize_book(
+        self,
+        text: str,
+        *,
+        path: Path,
+        source_label: str,
+        origin: str,
+        archive_member: str | None,
+        comment: str | None = None,
+    ) -> dict:
+        """Один вызов LLM по выборке из начала/середины/конца — не 6 проходов подряд."""
+        sample = self._sample_book_text(text, budget=10_000)
+        focus = ""
+        if comment and comment.strip():
+            focus = (
+                f"\nКомментарий/фокус пользователя (обязательно учти): {comment.strip()}\n"
+                "Отвечай в первую очередь на этот фокус, остальное — кратко."
+            )
+        chars = len(text)
+        instruction = (
+            f"Сделай краткую выжимку книги «{source_label}» "
+            f"(~{chars} символов текста; ниже — выборка начала/середины/конца). "
+            "Сюжет, герои, тон, ключевые идеи. Не цитируй длинные куски дословно."
+            f"{focus}"
+        )
+        digest = self.llm.summarize(sample, instruction=instruction)
+        self.memory.add_note(
+            "book",
+            digest[:1800],
+            meta={
+                "source": origin,
+                "archive_member": archive_member,
+                "chunks": 1,
+                "chars": chars,
+                "sampled_chars": len(sample),
+                "path": str(path),
+                "comment": comment,
+            },
+        )
+        return self._write_digest(
+            digest=digest,
+            origin=origin,
+            archive_member=archive_member,
+            source_label=source_label,
+            kind="book",
+            comment=comment,
+            chunks=1,
+        )
+
+    def _write_digest(
+        self,
+        *,
+        digest: str,
+        origin: str,
+        archive_member: str | None,
+        source_label: str,
+        kind: str,
+        comment: str | None,
+        chunks: int,
+    ) -> dict:
         digest_stem = Path(origin).stem
         if archive_member:
             digest_stem = f"{Path(origin).stem}__{Path(archive_member).stem}"
@@ -332,12 +414,41 @@ class BookReader:
         return {
             "source": origin,
             "archive_member": archive_member,
-            "chunks": len(chunks),
+            "chunks": chunks,
             "digest_path": str(out),
             "digest": digest,
             "kind": kind,
             "comment": comment,
         }
+
+    @staticmethod
+    def _sample_book_text(text: str, *, budget: int = 10_000) -> str:
+        """Выборка по книге: начало / четверти / конец. Дешевле, чем гнать все чанки в LLM."""
+        text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())
+        if not text:
+            return ""
+        if len(text) <= budget:
+            return text
+        # 5 окон
+        win = max(800, budget // 5)
+        n = len(text)
+        starts = [
+            0,
+            max(0, n // 4 - win // 2),
+            max(0, n // 2 - win // 2),
+            max(0, (3 * n) // 4 - win // 2),
+            max(0, n - win),
+        ]
+        parts: list[str] = []
+        seen: set[int] = set()
+        for s in starts:
+            s = min(s, max(0, n - 1))
+            key = s // max(win // 2, 1)
+            if key in seen:
+                continue
+            seen.add(key)
+            parts.append(text[s : s + win].strip())
+        return "\n\n---\n\n".join(p for p in parts if p)
 
     @staticmethod
     def _kind_for(path: Path) -> str:
@@ -662,19 +773,41 @@ class BookReader:
             raise RuntimeError(f"Не удалось разобрать DJVU (djvu-rs): {exc}") from exc
 
     def _fb2_to_text(self, raw: str) -> str:
+        """FB2 → текст. Streaming parse, без повторного обхода всего дерева в памяти."""
+        import io
+
         cleaned = re.sub(r'xmlns(:\w+)?="[^"]+"', "", raw)
-        try:
-            root = ET.fromstring(cleaned)
-        except ET.ParseError:
-            return re.sub(r"<[^>]+>", " ", raw)
         parts: list[str] = []
-        for elem in root.iter():
-            tag = elem.tag.split("}")[-1].lower()
-            if tag in {"p", "v", "subtitle", "title"} and elem.text:
-                parts.append(elem.text.strip())
-            if elem.tail and elem.tail.strip():
-                parts.append(elem.tail.strip())
-        return "\n".join(p for p in parts if p)
+        max_chars = 400_000  # хватит для выборки; не тащим мегароманы целиком в LLM
+        try:
+            for _event, elem in ET.iterparse(io.StringIO(cleaned), events=("end",)):
+                tag = elem.tag.split("}")[-1].lower()
+                if tag in {"p", "v", "subtitle", "text-author"}:
+                    bits = []
+                    if elem.text and elem.text.strip():
+                        bits.append(elem.text.strip())
+                    for child in elem:
+                        if child.tail and child.tail.strip():
+                            bits.append(child.tail.strip())
+                    if bits:
+                        parts.append(" ".join(bits))
+                elif tag == "title":
+                    title_bits = [
+                        (t or "").strip()
+                        for t in elem.itertext()
+                        if (t or "").strip()
+                    ]
+                    if title_bits:
+                        parts.append(" ".join(title_bits))
+                # освобождаем поддерево
+                elem.clear()
+                if sum(len(p) for p in parts) >= max_chars:
+                    break
+        except ET.ParseError:
+            rough = re.sub(r"<[^>]+>", " ", raw)
+            return re.sub(r"\s+", " ", rough)[:max_chars].strip()
+        text = "\n".join(p for p in parts if p)
+        return text[:max_chars]
 
     @staticmethod
     def _chunk(text: str, size: int = 3500) -> list[str]:

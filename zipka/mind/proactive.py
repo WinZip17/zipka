@@ -234,7 +234,13 @@ class ProactiveEngine:
         kind: str = "book",
         comment: str | None = None,
     ) -> str | None:
-        label = "кода" if kind.startswith("code") else "материала"
+        label = (
+            "статьи"
+            if kind.startswith("url")
+            else "кода"
+            if kind.startswith("code")
+            else "материала"
+        )
         focus = (
             f"\nКомментарий пользователя: {comment}\nУточнения строй вокруг него.\n"
             if comment
@@ -244,7 +250,7 @@ class ProactiveEngine:
             self._persona_bits()
             + f"Только что изучила {label}: {source}\n"
             f"{focus}"
-            f"Выжимка:\n{digest[:4000]}\n\n"
+            f"Выжимка:\n{digest[:2500]}\n\n"
             "Задай 1–2 уточняющих вопроса по сути (что проверить, что непонятно, "
             "что развить). Коротко, от лица Зипки."
         )
