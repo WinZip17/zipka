@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -42,10 +43,11 @@ class _RoleProxy:
         return self._router.list_models()
 
     def load_info(self) -> dict[str, Any]:
-        c = self._router._activate(self._role)
-        if hasattr(c, "load_info"):
-            return c.load_info()
-        return {"loaded": False}
+        with self._router._lock:
+            c = self._router._activate(self._role)
+            if hasattr(c, "load_info"):
+                return c.load_info()
+            return {"loaded": False}
 
     def load_error(self) -> str:
         c = self._router._client(self._role)
@@ -57,12 +59,14 @@ class _RoleProxy:
         self._router.unload_role(self._role)
 
     def chat(self, *args: Any, **kwargs: Any) -> str:
-        return self._router._activate(self._role).chat(*args, **kwargs)
+        with self._router._lock:
+            return self._router._activate(self._role).chat(*args, **kwargs)
 
     def summarize(self, text: str, *, instruction: str) -> str:
-        return self._router._activate(self._role).summarize(
-            text, instruction=instruction
-        )
+        with self._router._lock:
+            return self._router._activate(self._role).summarize(
+                text, instruction=instruction
+            )
 
 
 class LlmRouter:
@@ -79,6 +83,7 @@ class LlmRouter:
         self._chat_client = chat_client
         self._code_client = code_client
         self._active_role: str | None = None
+        self._lock = threading.RLock()
         self.chat_llm = _RoleProxy(self, "chat")
         self.code_llm = _RoleProxy(self, "code")
 
@@ -117,26 +122,28 @@ class LlmRouter:
         return self.chat_llm.load_error()
 
     def unload(self) -> None:
-        for c in {
-            id(self._chat_client): self._chat_client,
-            id(self._code_client): self._code_client,
-        }.values():
+        with self._lock:
+            for c in {
+                id(self._chat_client): self._chat_client,
+                id(self._code_client): self._code_client,
+            }.values():
+                if hasattr(c, "unload"):
+                    try:
+                        c.unload()
+                    except Exception:
+                        pass
+            self._active_role = None
+
+    def unload_role(self, role: str) -> None:
+        with self._lock:
+            c = self._client(role)
             if hasattr(c, "unload"):
                 try:
                     c.unload()
                 except Exception:
                     pass
-        self._active_role = None
-
-    def unload_role(self, role: str) -> None:
-        c = self._client(role)
-        if hasattr(c, "unload"):
-            try:
-                c.unload()
-            except Exception:
-                pass
-        if self._active_role == role:
-            self._active_role = None
+            if self._active_role == role:
+                self._active_role = None
 
     def _client(self, role: str) -> Any:
         return self._chat_client if role == "chat" else self._code_client
@@ -163,6 +170,14 @@ class LlmRouter:
 
     def summarize(self, text: str, *, instruction: str) -> str:
         return self.chat_llm.summarize(text, instruction=instruction)
+
+    def preload_chat(self) -> None:
+        """Фоновый прогрев чатовой модели после code-роли."""
+        with self._lock:
+            client = self._activate("chat")
+            ensure = getattr(client, "_ensure_loaded", None)
+            if callable(ensure):
+                ensure()
 
 
 def create_llm_client(settings: Settings | None = None) -> LlmRouter:

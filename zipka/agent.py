@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -360,6 +361,7 @@ class Zipka:
             if rebuild:
                 reply += f"\nСборка UI: {rebuild}"
             self._remember_turn(text, reply)
+            self._after_code_role()
             return reply
 
         if self.hard.has_pending() and "патч" in text.lower():
@@ -389,6 +391,7 @@ class Zipka:
                 return reply
             reply = self.hard.format_pending(pending)
             self._remember_turn(text, reply)
+            self._after_code_role()
             return reply
 
         if not self.llm.is_available():
@@ -422,36 +425,70 @@ class Zipka:
         self.proactive.bump_turn()
 
         try:
-            self.user.observe_dialogue(text, reply)
-        except Exception:
-            pass
-        finally:
-            self.user._turn_alert = None
-
-        if auto_soft and self._wants_soft_evolve(text):
-            try:
-                result = self.soft.apply_user_request(text)
-                reply += f"\n\n[soft-evolve] {result.get('reason') or 'обновилась'}"
-            except Exception:
-                pass
-
-        if self.mind.should_reflect():
-            try:
-                state = self.mind.reflect()
-                reply += (
-                    f"\n\n[рефлексия] фокус: {state.get('focus')}; "
-                    f"настроение: {state.get('mood')}"
-                )
-            except Exception:
-                pass
-
-        try:
             nudge = self.proactive.maybe_goal_nudge()
             reply = self.proactive.attach(reply, nudge)
         except Exception:
             pass
 
+        # Фон: профиль/рефлексия не должны держать UI на «Вникаю…»
+        # (после кодинга ещё и перезагрузка другой GGUF — минуты).
+        do_soft = auto_soft and self._wants_soft_evolve(text)
+        do_reflect = self.mind.should_reflect()
+        if do_soft:
+            try:
+                result = self.soft.apply_user_request(text)
+                reply += f"\n\n[soft-evolve] {result.get('reason') or 'обновилась'}"
+            except Exception:
+                pass
+        self._schedule_post_chat(text, reply, reflect=do_reflect, observe=True)
+
         return reply
+
+    def _schedule_post_chat(
+        self,
+        user_text: str,
+        reply: str,
+        *,
+        reflect: bool,
+        observe: bool,
+    ) -> None:
+        def _job() -> None:
+            try:
+                if observe:
+                    try:
+                        self.user.observe_dialogue(user_text, reply)
+                    except Exception:
+                        pass
+                    finally:
+                        self.user._turn_alert = None
+                elif self.user._turn_alert is not None:
+                    self.user._turn_alert = None
+                if reflect:
+                    try:
+                        self.mind.reflect()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        threading.Thread(target=_job, name="zipka-post-chat", daemon=True).start()
+
+    def _after_code_role(self) -> None:
+        """После патча заранее вернуть чатовую GGUF в память (фон)."""
+        if not isinstance(self.llm, LlmRouter):
+            return
+        if self.llm.same_model():
+            return
+
+        def _preload() -> None:
+            try:
+                self.llm.preload_chat()
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=_preload, name="zipka-preload-chat", daemon=True
+        ).start()
 
     def try_read_url_from_message(self, text: str) -> str | None:
         """Прочитать https-ссылку из чата (статья и т.п.)."""
@@ -626,6 +663,7 @@ class Zipka:
                     reply = self.proactive.attach(
                         reply, self.hard.format_pending(pending)
                     )
+                    self._after_code_role()
                 except Exception as exc:
                     reply = self.proactive.attach(
                         reply, f"Правки не подготовила: {exc}"

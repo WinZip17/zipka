@@ -276,6 +276,7 @@ def api_approve() -> dict:
     if not agent.hard.has_pending():
         raise HTTPException(400, "Нет ожидающего патча")
     meta = agent.hard.apply_pending()
+    agent._after_code_role()
     return meta
 
 

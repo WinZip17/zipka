@@ -785,9 +785,23 @@ class UserProfiler:
         # не учимся на репликах «другого» при алерте этого хода
         if self._turn_alert and self._turn_alert.get("alert"):
             return None
-        # служебные короткие команды не анализируем
+        # короткие «спасибо/класс» — не гоняем полный JSON-профиль
         low = user_text.strip().lower()
         if low in {"ок", "ok", "да", "нет", "ага", "угу", "/ping"}:
+            return None
+        if len(user_text.strip()) < 120 and any(
+            t in low
+            for t in (
+                "класс",
+                "супер",
+                "спасибо",
+                "молодец",
+                "круто",
+                "отлично",
+                "ты это сделала",
+                "начало положено",
+            )
+        ):
             return None
 
         current = self.load()
