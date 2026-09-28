@@ -12,7 +12,7 @@ ComputeMode = Literal["cpu", "gpu", "hybrid"]
 
 DEFAULT_RUNTIME: dict[str, Any] = {
     "compute_mode": "cpu",
-    "gpu_layers": 24,
+    "gpu_layers": 16,
     "chat_model_id": "pathfinder",
 }
 
@@ -42,9 +42,9 @@ def load_runtime(settings: Settings | None = None) -> dict[str, Any]:
         mode = "cpu"
     out["compute_mode"] = mode
     try:
-        out["gpu_layers"] = max(1, min(int(out.get("gpu_layers") or 24), 128))
+        out["gpu_layers"] = max(1, min(int(out.get("gpu_layers") or 16), 128))
     except (TypeError, ValueError):
-        out["gpu_layers"] = 24
+        out["gpu_layers"] = 16
     chat_id = str(out.get("chat_model_id") or "pathfinder").strip().lower()
     if chat_id not in {"pathfinder", "qwen25"}:
         chat_id = "pathfinder"
@@ -84,7 +84,35 @@ def resolve_gpu_layers(settings: Settings | None = None) -> int:
     env_layers = int(settings.zipka_gguf_gpu_layers or 0)
     if env_layers > 0 and not rt.get("gpu_layers"):
         return env_layers
-    return int(rt.get("gpu_layers") or 24)
+    return int(rt.get("gpu_layers") or 16)
+
+
+def hybrid_explain(
+    *,
+    n_gpu: int,
+    n_layer: int | None = None,
+) -> str:
+    """Понятное объяснение hybrid для UI."""
+    if n_layer and n_layer > 0:
+        gpu = min(max(0, n_gpu), n_layer)
+        cpu = n_layer - gpu
+        pct = round(100 * gpu / n_layer)
+        tip = (
+            f"Hybrid: {gpu}/{n_layer} слоёв на GPU (~{pct}%), {cpu} на CPU. "
+            "Нагрузка в основном на видеокарте — CPU в диспетчере часто почти не видно. "
+            "Чтобы сильнее задействовать процессор, снизь слайдер (8–16)."
+        )
+        if gpu >= n_layer:
+            tip = (
+                f"Hybrid: {n_gpu} ≥ {n_layer} слоёв модели — фактически весь расчёт на GPU "
+                "(как режим GPU). Уменьши слайдер, если нужен CPU."
+            )
+        return tip
+    return (
+        f"Hybrid: {n_gpu} слоёв на GPU, остальные на CPU. "
+        "Pathfinder ≈40 слоёв: при 24 на GPU процессор почти не заметно. "
+        "Для заметного CPU поставь 8–16."
+    )
 
 
 def detect_gpu_capability() -> dict[str, Any]:
@@ -147,15 +175,37 @@ def detect_gpu_capability() -> dict[str, Any]:
     }
 
 
-def compute_status(settings: Settings | None = None) -> dict[str, Any]:
+def compute_status(
+    settings: Settings | None = None,
+    *,
+    load_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     settings = settings or get_settings()
     rt = load_runtime(settings)
     layers = resolve_gpu_layers(settings)
     cap = detect_gpu_capability()
-    return {
+    n_layer = None
+    if load_info and load_info.get("n_layer"):
+        try:
+            n_layer = int(load_info["n_layer"])
+        except (TypeError, ValueError):
+            n_layer = None
+    hybrid_note = hybrid_explain(
+        n_gpu=int(rt.get("gpu_layers") or 16),
+        n_layer=n_layer,
+    )
+    note = cap.get("note") or ""
+    if rt["compute_mode"] == "hybrid":
+        note = f"{hybrid_note} {note}".strip()
+    out: dict[str, Any] = {
         "mode": rt["compute_mode"],
         "gpu_layers": rt["gpu_layers"],
         "resolved_n_gpu_layers": layers,
-        "hybrid_possible": True,  # llama.cpp всегда умеет делить слои
+        "hybrid_possible": True,
+        "hybrid_hint": hybrid_note,
         **cap,
+        "note": note,
     }
+    if load_info:
+        out["load"] = load_info
+    return out

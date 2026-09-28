@@ -920,8 +920,9 @@ export function SidePanel({
             Модель: CPU / GPU
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
-            Можно использовать оба сразу (hybrid): часть слоёв на видеокарте, остальное на
-            процессоре. GPU требует CUDA-сборку llama-cpp-python (не CPU-колесо).
+            Hybrid делит слои: часть на видеокарте, остальное на процессоре. Pathfinder ≈40
+            слоёв — при 24 на GPU CPU почти не видно в диспетчере (GPU делает ~60%). Для
+            заметной нагрузки на CPU поставь 8–16. Режим GPU = все слои на карте.
           </Typography>
           <ToggleButtonGroup
             exclusive
@@ -941,11 +942,15 @@ export function SidePanel({
             <Box sx={{ px: 0.5, mb: 1.5 }}>
               <Typography variant="caption" color="text.secondary">
                 Слоёв на GPU: {gpuLayers}
+                {status?.compute?.load?.n_layer
+                  ? ` / ${status.compute.load.n_layer} у модели`
+                  : " (Pathfinder ≈40)"}
+                {" · "}меньше число = больше CPU
               </Typography>
               <Slider
                 size="small"
                 min={1}
-                max={64}
+                max={Math.max(40, Number(status?.compute?.load?.n_layer) || 40)}
                 value={gpuLayers}
                 onChange={(_e, v) => setGpuLayers(Array.isArray(v) ? v[0] : v)}
                 valueLabelDisplay="auto"
@@ -956,6 +961,16 @@ export function SidePanel({
             <Alert severity={status.compute.llama_gpu_offload ? "success" : "info"} sx={{ mb: 1.5 }}>
               {status.compute.note}
             </Alert>
+          )}
+          {status?.compute?.load?.n_cpu_layers != null && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+              Сейчас загружено: GPU{" "}
+              {status.compute.load.n_gpu_layers_effective ?? "—"} / CPU{" "}
+              {status.compute.load.n_cpu_layers}
+              {status.compute.load.n_threads
+                ? ` · потоков CPU: ${status.compute.load.n_threads}`
+                : ""}
+            </Typography>
           )}
           {computeMsg && (
             <Typography

@@ -70,6 +70,7 @@ def describe_backend(client) -> dict:
             "available": ok,
             "chat_model_id": active_chat_model_id(settings),
             "chat_model_label": chat.get("active_label"),
+            "load": client.load_info(),
         }
         if not ok:
             info["error"] = client.load_error()

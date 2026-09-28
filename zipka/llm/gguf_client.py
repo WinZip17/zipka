@@ -85,15 +85,27 @@ class GgufClient:
         self._llm: Any = None
         self._loaded_ctx: int | None = None
         self._loaded_gpu: int | None = None
+        self._n_layer: int | None = None
+        self._n_threads: int | None = None
 
     @property
     def backend(self) -> str:
         return "gguf"
 
     def unload(self) -> None:
+        llm = self._llm
         self._llm = None
         self._loaded_ctx = None
         self._loaded_gpu = None
+        self._n_layer = None
+        self._n_threads = None
+        if llm is not None:
+            close = getattr(llm, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
     def is_available(self) -> bool:
         if self.model_path is None or not self.model_path.is_file():
@@ -108,16 +120,74 @@ class GgufClient:
     def list_models(self) -> list[str]:
         return [p.name for p in find_gguf_files(self.models_dir)]
 
+    def load_info(self) -> dict[str, Any]:
+        """Фактические параметры загруженной (или желаемой) модели."""
+        want_gpu = int(resolve_gpu_layers(self.settings))
+        n_layer = self._n_layer
+        gpu_eff = want_gpu
+        if want_gpu < 0:
+            gpu_eff = n_layer if n_layer else -1
+        elif n_layer is not None:
+            gpu_eff = min(want_gpu, n_layer)
+        cpu_layers = None
+        if n_layer is not None and gpu_eff is not None and gpu_eff >= 0:
+            cpu_layers = max(0, n_layer - int(gpu_eff))
+        return {
+            "n_layer": n_layer,
+            "n_gpu_layers_requested": want_gpu,
+            "n_gpu_layers_effective": gpu_eff if self._llm is not None else None,
+            "n_cpu_layers": cpu_layers if self._llm is not None else None,
+            "n_threads": self._n_threads,
+            "loaded": self._llm is not None,
+        }
+
     def _desired_ctx(self) -> int:
         return max(2048, int(self.settings.zipka_gguf_ctx))
+
+    @staticmethod
+    def _resolve_threads(settings: Settings) -> int:
+        import os
+
+        configured = int(settings.zipka_gguf_threads or 0)
+        if configured > 0:
+            return configured
+        return max(1, os.cpu_count() or 4)
+
+    @staticmethod
+    def _read_n_layer(llm: Any) -> int | None:
+        meta = getattr(llm, "metadata", None) or {}
+        for key in (
+            "llama.block_count",
+            "qwen2.block_count",
+            "qwen3.block_count",
+            "gemma.block_count",
+            "gemma2.block_count",
+        ):
+            raw = meta.get(key)
+            if raw is None:
+                continue
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                continue
+        # fallback: любое *.block_count
+        for key, raw in meta.items():
+            if str(key).endswith(".block_count"):
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    continue
+        return None
 
     def _ensure_loaded(self) -> Any:
         want_ctx = self._desired_ctx()
         want_gpu = int(resolve_gpu_layers(self.settings))
+        want_threads = self._resolve_threads(self.settings)
         if (
             self._llm is not None
             and self._loaded_ctx == want_ctx
             and self._loaded_gpu == want_gpu
+            and self._n_threads == want_threads
         ):
             return self._llm
         try:
@@ -130,16 +200,23 @@ class GgufClient:
             ) from exc
 
         self.unload()
-        n_threads = int(self.settings.zipka_gguf_threads) or None
-        self._llm = Llama(
-            model_path=str(self.model_path),
-            n_ctx=want_ctx,
-            n_gpu_layers=want_gpu,
-            n_threads=n_threads,
-            verbose=False,
-        )
+        kwargs: dict[str, Any] = {
+            "model_path": str(self.model_path),
+            "n_ctx": want_ctx,
+            "n_gpu_layers": want_gpu,
+            "n_threads": want_threads,
+            "n_threads_batch": want_threads,
+            "verbose": False,
+        }
+        try:
+            self._llm = Llama(**kwargs)
+        except TypeError:
+            kwargs.pop("n_threads_batch", None)
+            self._llm = Llama(**kwargs)
         self._loaded_ctx = want_ctx
         self._loaded_gpu = want_gpu
+        self._n_threads = want_threads
+        self._n_layer = self._read_n_layer(self._llm)
         return self._llm
 
     def _estimate_tokens(self, llm: Any, messages: list[dict[str, str]]) -> int:

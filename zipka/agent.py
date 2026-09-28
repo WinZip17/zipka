@@ -172,7 +172,10 @@ class Zipka:
                 "ram_available_human": format_bytes(avail) if avail else None,
             },
             "user": self.user.summary_for_ui(),
-            "compute": compute_status(self.settings),
+            "compute": compute_status(
+                self.settings,
+                load_info=getattr(self.llm, "load_info", lambda: None)(),
+            ),
             "chat_models": chat_models_status(self.settings),
         }
 
@@ -211,9 +214,12 @@ class Zipka:
             patch["gpu_layers"] = gpu_layers
         save_runtime(patch, self.settings)
         reloaded = self._reload_llm()
+        load_info = None
+        if hasattr(self.llm, "load_info"):
+            load_info = self.llm.load_info()
         return {
             "ok": True,
-            "compute": compute_status(self.settings),
+            "compute": compute_status(self.settings, load_info=load_info),
             **reloaded,
         }
 

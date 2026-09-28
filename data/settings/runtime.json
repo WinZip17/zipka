@@ -1,4 +1,5 @@
 {
-  "compute_mode": "gpu",
-  "gpu_layers": 24
+  "compute_mode": "hybrid",
+  "gpu_layers": 12,
+  "chat_model_id": "pathfinder"
 }

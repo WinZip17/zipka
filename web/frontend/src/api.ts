@@ -85,9 +85,18 @@ export type ComputeSettings = {
   gpu_layers?: number;
   resolved_n_gpu_layers?: number;
   hybrid_possible?: boolean;
+  hybrid_hint?: string;
   llama_gpu_offload?: boolean;
   nvidia_detected?: boolean;
   note?: string;
+  load?: {
+    n_layer?: number | null;
+    n_gpu_layers_requested?: number | null;
+    n_gpu_layers_effective?: number | null;
+    n_cpu_layers?: number | null;
+    n_threads?: number | null;
+    loaded?: boolean;
+  };
 };
 
 export type StatusResponse = {
