@@ -409,12 +409,20 @@ class NewsDesk:
         due = self.list_due_sources()
         if self._pending_after_chat or due:
             self._pending_after_chat = False
-            self.maybe_auto_ingest(chat_busy=False)
+            self.maybe_auto_ingest(chat_busy=False, finetune_busy=False)
 
-    def maybe_auto_ingest(self, *, chat_busy: bool) -> dict[str, Any] | None:
+    def maybe_auto_ingest(
+        self,
+        *,
+        chat_busy: bool,
+        finetune_busy: bool = False,
+    ) -> dict[str, Any] | None:
         due = self.list_due_sources()
         if not due:
             self._pending_after_chat = False
+            return None
+        if finetune_busy:
+            # не копим pending: после дообучения due снова подхватит scheduler
             return None
         if chat_busy:
             self._pending_after_chat = True

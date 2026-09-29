@@ -119,6 +119,45 @@ class Zipka:
     def is_chat_busy(self) -> bool:
         return bool(self._chat_busy)
 
+    def is_finetune_busy(self) -> bool:
+        """Идёт LoRA-дообучение: не трогаем модель и фоновые задачи."""
+        try:
+            return self.finetune.is_running()
+        except Exception:
+            return False
+
+    FINETUNE_BUSY_MSG = (
+        "Сейчас идёт дообучение модели. Подожди окончания "
+        "или сбрось его в Настройки → Дообучение."
+    )
+
+    def unload_inference_models(self) -> None:
+        """Освободить RAM/VRAM перед тяжёлым LoRA (чат-GGUF / vision)."""
+        import gc
+
+        for holder in (self.llm, getattr(self, "vision", None)):
+            if holder is None:
+                continue
+            unload = getattr(holder, "unload", None)
+            if callable(unload):
+                try:
+                    unload()
+                except Exception:
+                    pass
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    def start_finetune_approved(self) -> dict[str, Any]:
+        """Старт дообучения: сначала выгрузить чат-модель, потом воркер."""
+        self.unload_inference_models()
+        return self.finetune.start_approved()
+
     def _code_llm(self) -> Any:
         if isinstance(self.llm, LlmRouter):
             return self.llm.code_llm
@@ -390,6 +429,8 @@ class Zipka:
         reply_to: dict[str, Any] | None = None,
         reply_chain: list[dict[str, Any]] | None = None,
     ) -> str:
+        if self.is_finetune_busy():
+            return self.FINETUNE_BUSY_MSG
         self._chat_busy = True
         try:
             return self._chat_inner(
@@ -401,7 +442,8 @@ class Zipka:
         finally:
             self._chat_busy = False
             try:
-                self.news.on_chat_idle()
+                if not self.is_finetune_busy():
+                    self.news.on_chat_idle()
             except Exception:
                 pass
 
@@ -490,7 +532,7 @@ class Zipka:
                     return reply
                 return "Нечего утверждать — заявки на дообучение нет."
             try:
-                started = self.finetune.start_approved()
+                started = self.start_finetune_approved()
             except Exception as exc:
                 reply = f"Не смогла запустить дообучение: {exc}"
                 self._remember_turn(text, reply)
@@ -1044,9 +1086,13 @@ class Zipka:
         return any(k in lowered for k in keys)
 
     def greet(self, *, force: bool = False) -> str | None:
+        if self.is_finetune_busy():
+            return None
         return self.proactive.greeting(force=force)
 
     def rare_ping(self, *, force: bool = False) -> str | None:
+        if self.is_finetune_busy():
+            return None
         return self.proactive.maybe_rare_ping(force=force)
 
     def try_look_from_message(self, text: str) -> str | None:

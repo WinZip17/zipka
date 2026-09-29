@@ -33,6 +33,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import {
   FILE_ACCEPT,
+  abortFinetune,
   addNewsSource,
   approvePatch,
   earsAction,
@@ -96,6 +97,20 @@ function parseIntervalChoice(value: string): string | number {
   return Number.isFinite(n) ? n : "global";
 }
 
+function formatElapsedHms(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
+}
+
+function parseUtcMs(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
+
 function InfoBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Box sx={{ mb: 2 }}>
@@ -154,7 +169,7 @@ const headerBtnSx = {
 export function SidePanel({
   status,
   pending,
-  busy,
+  busy: chatBusy,
   eyesOn,
   earsOn,
   archiveMember,
@@ -211,6 +226,31 @@ export function SidePanel({
   const [newsItems, setNewsItems] = useState(0);
   const [newsBusy, setNewsBusy] = useState(false);
   const [newsMsg, setNewsMsg] = useState<string | null>(null);
+  const [finetuneNowMs, setFinetuneNowMs] = useState(() => Date.now());
+
+  const finetuneRunning =
+    finetuneInfo?.status?.state === "running" ||
+    status?.finetune?.state === "running";
+  // Пока идёт дообучение — блокируем остальные действия в панели
+  const busy = chatBusy || finetuneRunning;
+  const finetuneStartedMs = parseUtcMs(
+    finetuneInfo?.status?.started_at || status?.finetune?.started_at,
+  );
+  const finetuneFinishedMs = parseUtcMs(
+    finetuneInfo?.status?.finished_at || status?.finetune?.finished_at,
+  );
+  // Таймер не скрываем после конца — замирает на finished_at / updated_at
+  const finetuneEndMs = finetuneRunning
+    ? finetuneNowMs
+    : (finetuneFinishedMs ??
+      parseUtcMs(
+        finetuneInfo?.status?.updated_at || status?.finetune?.updated_at,
+      ) ??
+      finetuneNowMs);
+  const finetuneElapsed =
+    finetuneStartedMs != null
+      ? formatElapsedHms(Math.max(0, finetuneEndMs - finetuneStartedMs))
+      : null;
 
   useEffect(() => {
     const c = status?.compute;
@@ -293,6 +333,19 @@ export function SidePanel({
     return () => window.clearInterval(id);
   }, [settingsOpen, finetuneInfo?.status?.state, onRefresh]);
 
+  useEffect(() => {
+    if (!finetuneRunning || finetuneStartedMs == null) return;
+    setFinetuneNowMs(Date.now());
+    const id = window.setInterval(() => setFinetuneNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [finetuneRunning, finetuneStartedMs]);
+
+  useEffect(() => {
+    if (!finetuneRunning) return;
+    setSettingsOpen(true);
+    setSettingsTab(2);
+  }, [finetuneRunning]);
+
   const onProposeFinetune = async () => {
     setFinetuneBusy(true);
     setFinetuneMsg(null);
@@ -325,6 +378,30 @@ export function SidePanel({
     try {
       const data = await startFinetune();
       setFinetuneMsg(data.message || `Запущено: ${data.job_id || ""}`);
+      setSettingsTab(2);
+      setSettingsOpen(true);
+      await refreshFinetune();
+      onRefresh();
+    } catch (err) {
+      setFinetuneMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFinetuneBusy(false);
+    }
+  };
+
+  const onAbortFinetune = async () => {
+    if (
+      !window.confirm(
+        "Сбросить / прервать дообучение? Зависший статус «running» тоже снимется.",
+      )
+    ) {
+      return;
+    }
+    setFinetuneBusy(true);
+    setFinetuneMsg(null);
+    try {
+      const data = await abortFinetune();
+      setFinetuneMsg(data.message || "Сброшено.");
       await refreshFinetune();
       onRefresh();
     } catch (err) {
@@ -1191,7 +1268,10 @@ export function SidePanel({
 
       <Dialog
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          if (finetuneRunning) return;
+          setSettingsOpen(false);
+        }}
         fullWidth
         maxWidth="sm"
         slotProps={{
@@ -1213,10 +1293,24 @@ export function SidePanel({
           }}
         >
           Настройки
+          {finetuneRunning ? (
+            <Typography
+              component="span"
+              variant="caption"
+              color="warning.main"
+              sx={{ display: "block", fontWeight: 600, mt: 0.35 }}
+            >
+              Идёт дообучение — модалку нельзя закрыть, пока не закончится или не
+              сбросишь.
+            </Typography>
+          ) : null}
         </DialogTitle>
         <Tabs
           value={settingsTab}
-          onChange={(_e, v: number) => setSettingsTab(v)}
+          onChange={(_e, v: number) => {
+            if (finetuneRunning) return;
+            setSettingsTab(v);
+          }}
           variant="scrollable"
           scrollButtons="auto"
           sx={{
@@ -1232,10 +1326,10 @@ export function SidePanel({
             },
           }}
         >
-          <Tab label="Модели" />
-          <Tab label="Новости" />
+          <Tab label="Модели" disabled={finetuneRunning} />
+          <Tab label="Новости" disabled={finetuneRunning} />
           <Tab label="Дообучение" />
-          <Tab label="Данные" />
+          <Tab label="Данные" disabled={finetuneRunning} />
         </Tabs>
         <DialogContent
           sx={{
@@ -1666,6 +1760,16 @@ export function SidePanel({
                       .join(" ")
                   }
                 />
+                {finetuneElapsed ? (
+                  <InfoLine
+                    label="Время"
+                    value={
+                      finetuneRunning
+                        ? finetuneElapsed
+                        : `${finetuneElapsed} (стоп)`
+                    }
+                  />
+                ) : null}
                 <InfoLine
                   label="GGUF"
                   value={
@@ -1699,10 +1803,19 @@ export function SidePanel({
                 <Button
                   fullWidth
                   variant="outlined"
-                  disabled={busy || finetuneBusy}
+                  disabled={chatBusy || finetuneBusy}
                   onClick={() => void refreshFinetune().then(() => onRefresh())}
                 >
                   Обновить статус
+                </Button>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  color="warning"
+                  disabled={chatBusy || finetuneBusy}
+                  onClick={() => void onAbortFinetune()}
+                >
+                  Сбросить / прервать
                 </Button>
                 <Button
                   fullWidth
@@ -1710,7 +1823,7 @@ export function SidePanel({
                   disabled={
                     busy ||
                     finetuneBusy ||
-                    finetuneInfo?.status?.state === "running"
+                    finetuneRunning
                   }
                   onClick={() => void onProposeFinetune()}
                 >
@@ -1724,7 +1837,7 @@ export function SidePanel({
                     busy ||
                     finetuneBusy ||
                     !finetuneInfo?.pending ||
-                    finetuneInfo?.status?.state === "running"
+                    finetuneRunning
                   }
                   onClick={() => void onStartFinetune()}
                 >
@@ -1781,8 +1894,15 @@ export function SidePanel({
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setSettingsOpen(false)} sx={{ color: "text.secondary" }}>
-            Закрыть
+          <Button
+            onClick={() => {
+              if (finetuneRunning) return;
+              setSettingsOpen(false);
+            }}
+            disabled={finetuneRunning}
+            sx={{ color: "text.secondary" }}
+          >
+            {finetuneRunning ? "Закрыть (после обучения)" : "Закрыть"}
           </Button>
         </DialogActions>
       </Dialog>

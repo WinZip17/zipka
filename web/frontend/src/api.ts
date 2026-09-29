@@ -161,6 +161,8 @@ export type StatusResponse = {
     log?: string;
     result?: Record<string, unknown>;
     updated_at?: string;
+    started_at?: string;
+    finished_at?: string;
   };
   finetune_lineage?: {
     generation?: number;
@@ -411,6 +413,8 @@ export type FinetuneStatusResponse = {
     log?: string;
     result?: Record<string, unknown>;
     updated_at?: string;
+    started_at?: string;
+    finished_at?: string;
   };
   pending?: {
     id?: string;
@@ -465,6 +469,23 @@ export async function startFinetune() {
   if (!res.ok) {
     throw new Error(
       typeof data.detail === "string" ? data.detail : "Не удалось запустить дообучение",
+    );
+  }
+  return data;
+}
+
+export async function abortFinetune() {
+  const res = await fetch("/api/finetune/abort", { method: "POST" });
+  const data = await parseJson<{
+    ok?: boolean;
+    killed?: boolean;
+    status?: FinetuneStatusResponse["status"];
+    message?: string;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string" ? data.detail : "Не удалось сбросить дообучение",
     );
   }
   return data;

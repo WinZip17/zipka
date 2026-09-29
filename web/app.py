@@ -26,12 +26,28 @@ _log = logging.getLogger("zipka.web")
 agent = Zipka()
 _news_stop = threading.Event()
 
+_FINETUNE_BUSY_HTTP = (
+    "Идёт дообучение модели. Подожди окончания или нажми "
+    "«Сбросить / прервать» в Настройки → Дообучение."
+)
+
+
+def _ensure_not_finetuning() -> None:
+    if agent.is_finetune_busy():
+        raise HTTPException(409, _FINETUNE_BUSY_HTTP)
+
 
 def _news_scheduler_loop() -> None:
     while True:
         try:
-            busy = agent.is_chat_busy()
-            agent.news.maybe_auto_ingest(chat_busy=busy)
+            if agent.is_finetune_busy():
+                pass
+            else:
+                busy = agent.is_chat_busy()
+                agent.news.maybe_auto_ingest(
+                    chat_busy=busy,
+                    finetune_busy=False,
+                )
         except Exception as exc:
             _log.warning("news auto-ingest: %s", exc)
         if _news_stop.wait(20):
@@ -125,6 +141,7 @@ def api_get_compute() -> dict:
 
 @app.post("/api/settings/compute")
 def api_set_compute(body: ComputeIn) -> dict:
+    _ensure_not_finetuning()
     try:
         return agent.set_compute(body.mode, gpu_layers=body.gpu_layers)
     except ValueError as exc:
@@ -140,6 +157,7 @@ def api_get_chat_model() -> dict:
 
 @app.post("/api/settings/chat-model")
 def api_set_chat_model(body: ChatModelIn) -> dict:
+    _ensure_not_finetuning()
     try:
         if body.chat_gguf or body.code_gguf:
             return agent.set_models(chat_gguf=body.chat_gguf, code_gguf=body.code_gguf)
@@ -159,6 +177,7 @@ def api_get_models() -> dict:
 
 @app.post("/api/settings/models")
 def api_set_models(body: ModelsIn) -> dict:
+    _ensure_not_finetuning()
     try:
         return agent.set_models(chat_gguf=body.chat_gguf, code_gguf=body.code_gguf)
     except ValueError as exc:
@@ -194,6 +213,7 @@ def api_eyes(body: ActionIn) -> dict:
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    _ensure_not_finetuning()
     try:
         if action in {"snap", "camera", "cam"}:
             snap = agent.eyes.snap()
@@ -233,6 +253,7 @@ def api_ears(body: ActionIn) -> dict:
     if action == "off":
         return {"ok": True, "message": agent.ears.off()}
     if action == "listen":
+        _ensure_not_finetuning()
         text = agent.ears.listen(seconds=body.seconds)
         comment = agent.comment_ears(text)
         reply = agent.chat(text)
@@ -247,11 +268,13 @@ def api_ears(body: ActionIn) -> dict:
 
 @app.post("/api/learn")
 def api_learn(body: LearnIn) -> dict:
+    _ensure_not_finetuning()
     return agent.net.learn(body.query)
 
 
 @app.post("/api/read")
 def api_read(body: ReadIn) -> dict:
+    _ensure_not_finetuning()
     return agent.books.read(
         body.path, member=body.member, comment=body.comment
     )
@@ -263,6 +286,7 @@ async def api_upload_book(
     member: str | None = Form(default=None),
     comment: str | None = Form(default=None),
 ) -> dict:
+    _ensure_not_finetuning()
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "Пустой файл")
@@ -320,6 +344,7 @@ def api_reset_info() -> dict:
 
 @app.post("/api/approve")
 def api_approve() -> dict:
+    _ensure_not_finetuning()
     if not agent.hard.has_pending():
         raise HTTPException(400, "Нет ожидающего патча")
     meta = agent.hard.apply_pending()
@@ -359,7 +384,15 @@ def api_finetune_propose() -> dict:
 @app.post("/api/finetune/start")
 def api_finetune_start() -> dict:
     try:
-        return agent.finetune.start_approved()
+        return agent.start_finetune_approved()
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/finetune/abort")
+def api_finetune_abort() -> dict:
+    try:
+        return agent.finetune.abort_running(kill=True)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -454,6 +487,7 @@ def api_news_auto() -> dict:
 @app.post("/api/news/ingest")
 def api_news_ingest() -> dict:
     try:
+        _ensure_not_finetuning()
         if agent.is_chat_busy():
             raise HTTPException(409, "Сейчас идёт ответ в чате — подожди и обнови ленту снова")
         return agent.news.ingest()
@@ -471,6 +505,7 @@ def api_news_search(q: str = "", days: int = 7) -> dict:
 
 @app.post("/api/reflect")
 def api_reflect() -> dict:
+    _ensure_not_finetuning()
     return agent.mind.reflect()
 
 

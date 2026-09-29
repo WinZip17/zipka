@@ -14,6 +14,7 @@ torch в основном процессе чата. Нужно: pip install -e 
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -48,6 +49,92 @@ HF_BASE_BY_GGUF_HINT: list[tuple[str, str, str]] = [
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_pid_alive(pid: Any) -> bool:
+    """Проверка, жив ли процесс (без сигнала kill)."""
+    try:
+        pid_i = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid_i <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid_i)
+        if not handle:
+            return False
+        exit_code = ctypes.c_ulong()
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+        kernel32.CloseHandle(handle)
+        if not ok:
+            return False
+        # STILL_ACTIVE = 259
+        return int(exit_code.value) == 259
+    try:
+        os.kill(pid_i, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _tail_text(path: Path | str | None, *, max_chars: int = 2500) -> str:
+    if not path:
+        return ""
+    p = Path(path)
+    if not p.is_file():
+        return ""
+    try:
+        raw = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    raw = raw.strip()
+    if len(raw) <= max_chars:
+        return raw
+    return raw[-max_chars:]
+
+
+def _crash_message_from_log(log_path: Any, *, pid: Any = None) -> str:
+    """Человекочитаемая причина, если воркер умер без status=failed (OOM/abort)."""
+    tail = _tail_text(log_path)
+    low = tail.lower()
+    pid_s = f" (pid {pid})" if pid is not None else ""
+    if any(
+        x in low
+        for x in (
+            "memory allocation",
+            "out of memory",
+            "oom",
+            "cuda out of memory",
+            "not enough memory",
+            "std::bad_alloc",
+        )
+    ):
+        return (
+            f"Воркер дообучения упал из-за нехватки памяти{pid_s}. "
+            "Qwen3-8B на CPU без 4-bit нужен большой запас RAM; "
+            "лучше GPU + bitsandbytes, либо меньшая HF-база / освободить память. "
+            "Можно снова «Подготовить»."
+            + (f"\n\nЛог:\n{tail[-900:]}" if tail else "")
+        )
+    if tail:
+        last_lines = "\n".join(tail.splitlines()[-12:])
+        return (
+            f"Воркер дообучения завершился аварийно{pid_s}. "
+            "Можно снова «Подготовить»."
+            f"\n\nХвост лога:\n{last_lines}"
+        )
+    return (
+        f"Процесс дообучения прерван{pid_s}: pid не найден. "
+        "Можно снова нажать «Подготовить»."
+    )
 
 
 def resolve_hf_base_for_gguf(gguf_name: str) -> dict[str, Any]:
@@ -170,6 +257,10 @@ class FinetuneEvolve:
 
     def has_pending(self) -> bool:
         return self.pending_path.exists()
+
+    def is_running(self) -> bool:
+        """True, пока статус job = running (даже если процесс уже убит — до refresh)."""
+        return self.load_status().get("state") == "running"
 
     def load_status(self) -> dict[str, Any]:
         if not self.status_path.exists():
@@ -559,6 +650,7 @@ class FinetuneEvolve:
                     "job_id": job["id"],
                     "generation": job.get("generation"),
                     "phase": "starting",
+                    "started_at": job["started_at"],
                     "job_path": str(job_path),
                 }
             )
@@ -592,6 +684,7 @@ class FinetuneEvolve:
                 "pid": proc.pid,
                 "log": str(log_path),
                 "job_path": str(job_path),
+                "started_at": job["started_at"],
             }
         )
         self.memory.log_evolve(
@@ -643,33 +736,178 @@ class FinetuneEvolve:
         }
 
     def refresh_job_status(self) -> dict[str, Any]:
-        """Прочитать status.json / job file после работы воркера."""
+        """Прочитать status.json / job file после работы воркера.
+
+        Если state=running, а pid мёртв — пометить interrupted (после Ctrl+C / kill).
+        """
         st = self.load_status()
         job_path = st.get("job_path")
+        job: dict[str, Any] | None = None
         if job_path and Path(job_path).is_file():
             try:
                 job = json.loads(Path(job_path).read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 job = None
-            if job and job.get("status") == "succeeded" and st.get("state") != "done":
-                meta = self.apply_success_from_job(job)
+
+        if job and job.get("status") == "succeeded" and st.get("state") != "done":
+            meta = self.apply_success_from_job(job)
+            finished = job.get("finished_at") or _utc_now()
+            self._write_status(
+                {
+                    "state": "done",
+                    "job_id": job.get("id"),
+                    "generation": meta.get("generation"),
+                    "result": meta,
+                    "job_path": job_path,
+                    "started_at": st.get("started_at") or job.get("started_at"),
+                    "finished_at": finished,
+                    "phase": st.get("phase") or "finished",
+                    "log": st.get("log"),
+                }
+            )
+            return self.load_status()
+
+        if job and job.get("status") == "failed" and st.get("state") == "running":
+            finished = job.get("finished_at") or _utc_now()
+            self._write_status(
+                {
+                    "state": "failed",
+                    "job_id": job.get("id"),
+                    "error": job.get("error"),
+                    "job_path": job_path,
+                    "phase": st.get("phase"),
+                    "started_at": st.get("started_at") or job.get("started_at"),
+                    "finished_at": finished,
+                    "log": st.get("log"),
+                    "pid": st.get("pid"),
+                }
+            )
+            return self.load_status()
+
+        if st.get("state") == "running":
+            # подтянуть started_at из job, если в status нет (старые запуски)
+            if not st.get("started_at") and job and job.get("started_at"):
+                st = {**st, "started_at": job["started_at"]}
                 self._write_status(
                     {
-                        "state": "done",
-                        "job_id": job.get("id"),
-                        "generation": meta.get("generation"),
-                        "result": meta,
-                        "job_path": job_path,
+                        **{k: v for k, v in st.items() if k != "updated_at"},
+                        "started_at": job["started_at"],
                     }
                 )
-                return self.load_status()
-            if job and job.get("status") == "failed":
-                self._write_status(
-                    {
-                        "state": "failed",
-                        "job_id": job.get("id"),
-                        "error": job.get("error"),
-                        "job_path": job_path,
-                    }
+                st = self.load_status()
+            pid = st.get("pid")
+            if pid is not None and not _is_pid_alive(pid):
+                return self._mark_interrupted(
+                    st,
+                    job=job,
+                    error=_crash_message_from_log(st.get("log"), pid=pid),
+                    state="failed",
                 )
+            if pid is None and (not job or job.get("status") == "running"):
+                # зависший статус без pid / без финала
+                return self._mark_interrupted(
+                    st,
+                    job=job,
+                    error=_crash_message_from_log(st.get("log"), pid=None),
+                    state="failed",
+                )
+
         return self.load_status()
+
+    def _mark_interrupted(
+        self,
+        st: dict[str, Any],
+        *,
+        job: dict[str, Any] | None,
+        error: str,
+        state: str = "interrupted",
+    ) -> dict[str, Any]:
+        job_path = st.get("job_path")
+        finished = _utc_now()
+        if job and job_path and Path(str(job_path)).is_file():
+            if job.get("status") == "running":
+                job = dict(job)
+                job["status"] = "failed"
+                job["error"] = error
+                job["finished_at"] = finished
+                try:
+                    Path(str(job_path)).write_text(
+                        json.dumps(job, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
+        self._write_status(
+            {
+                "state": state,
+                "job_id": st.get("job_id"),
+                "generation": st.get("generation"),
+                "phase": st.get("phase"),
+                "pid": st.get("pid"),
+                "log": st.get("log"),
+                "job_path": job_path,
+                "error": error,
+                "started_at": st.get("started_at")
+                or (job or {}).get("started_at"),
+                "finished_at": finished,
+            }
+        )
+        return self.load_status()
+
+    def abort_running(self, *, kill: bool = True) -> dict[str, Any]:
+        """Прервать/сбросить зависшее или идущее дообучение."""
+        with self._lock:
+            st = self.refresh_job_status()
+            if st.get("state") != "running":
+                # уже не running после refresh (interrupted/failed/done)
+                return {
+                    "ok": True,
+                    "status": st,
+                    "message": (
+                        f"Сейчас state={st.get('state')}. "
+                        + (str(st.get("error") or "")).strip()
+                    ).strip(),
+                }
+            pid = st.get("pid")
+            killed = False
+            if kill and pid is not None and _is_pid_alive(pid):
+                try:
+                    if sys.platform == "win32":
+                        subprocess.run(
+                            ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        )
+                    else:
+                        os.kill(int(pid), 15)
+                    killed = True
+                except OSError as exc:
+                    return {
+                        "ok": False,
+                        "status": st,
+                        "message": f"Не удалось остановить pid {pid}: {exc}",
+                    }
+            job = None
+            job_path = st.get("job_path")
+            if job_path and Path(str(job_path)).is_file():
+                try:
+                    job = json.loads(Path(str(job_path)).read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    job = None
+            st2 = self._mark_interrupted(
+                st,
+                job=job,
+                error=(
+                    f"Дообучение прервано вручную"
+                    + (f" (pid {pid})" if pid else "")
+                    + ("." if killed or not pid else " — процесс уже не работал.")
+                ),
+                state="interrupted",
+            )
+            return {
+                "ok": True,
+                "killed": killed,
+                "status": st2,
+                "message": st2.get("error") or "Сброшено.",
+            }

@@ -405,7 +405,7 @@ def news_cmd(
 def finetune_cmd(
     action: str = typer.Argument(
         "status",
-        help="status|propose|start|lineage",
+        help="status|propose|start|abort|lineage",
     ),
     max_steps: int = typer.Option(60, help="Шагов LoRA"),
     lora_r: int = typer.Option(8, help="Rank LoRA"),
@@ -430,13 +430,21 @@ def finetune_cmd(
         return
     if action == "start":
         try:
-            started = z.finetune.start_approved()
+            started = z.start_finetune_approved()
         except Exception as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
         console.print(Panel(str(started), title="started"))
         return
-    raise typer.BadParameter("status|propose|start|lineage")
+    if action == "abort":
+        try:
+            out = z.finetune.abort_running(kill=True)
+        except Exception as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        console.print(Panel(str(out), title="abort"))
+        return
+    raise typer.BadParameter("status|propose|start|abort|lineage")
 
 
 @app.command()

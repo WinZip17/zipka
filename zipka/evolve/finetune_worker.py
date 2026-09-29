@@ -31,7 +31,16 @@ def _write_status(data_dir: Path, patch: dict[str, Any]) -> None:
     cur.update(patch)
     from datetime import datetime, timezone
 
-    cur["updated_at"] = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    cur["updated_at"] = now
+    # при финальных состояниях фиксируем finished_at (таймер в UI замирает)
+    if cur.get("state") in {
+        "done",
+        "failed",
+        "interrupted",
+        "succeeded_pending_apply",
+    } and not cur.get("finished_at"):
+        cur["finished_at"] = now
     status_path.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -74,6 +83,36 @@ def _format_example(row: dict[str, str], tokenizer: Any) -> str:
     return text
 
 
+def _available_ram_bytes() -> int | None:
+    try:
+        import psutil
+
+        return int(psutil.virtual_memory().available)
+    except Exception:
+        return None
+
+
+def _estimate_params_b(model_src: str) -> float:
+    low = str(model_src).lower()
+    for hint, n in (
+        ("32b", 32.0),
+        ("14b", 14.0),
+        ("13b", 13.0),
+        ("8b", 8.0),
+        ("7b", 7.0),
+        ("3b", 3.0),
+        ("1.5b", 1.5),
+        ("1b", 1.0),
+    ):
+        if hint in low:
+            return n
+    return 8.0
+
+
+def _estimate_load_bytes(model_src: str, *, bytes_per_param: float) -> int:
+    return int(_estimate_params_b(model_src) * 1e9 * bytes_per_param * 1.35)
+
+
 def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     _require_train_deps()
     import torch
@@ -114,10 +153,13 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    cuda = bool(torch.cuda.is_available())
+    # На CPU fp32 для 8B ≈ 32 ГБ — почти всегда OOM. Грузим веса в fp16.
+    dtype = torch.float16
     load_kwargs: dict[str, Any] = {
         "trust_remote_code": True,
         "torch_dtype": dtype,
+        "low_cpu_mem_usage": True,
     }
     # 4-bit если есть bitsandbytes (на Windows часто нет)
     use_4bit = False
@@ -126,7 +168,7 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
 
         from transformers import BitsAndBytesConfig
 
-        if torch.cuda.is_available():
+        if cuda:
             load_kwargs["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=dtype,
@@ -134,13 +176,40 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
                 bnb_4bit_quant_type="nf4",
             )
             use_4bit = True
-    except Exception:
+    except Exception as exc:
+        _log(f"4-bit недоступен: {exc}")
         use_4bit = False
 
-    if torch.cuda.is_available() and not use_4bit:
-        load_kwargs["device_map"] = "auto"
+    bytes_per_param = 0.5 if use_4bit else 2.0
+    need = _estimate_load_bytes(str(model_src), bytes_per_param=bytes_per_param)
+    avail = _available_ram_bytes()
+    avail_s = f"{avail / 1e9:.1f} ГБ" if avail is not None else "?"
+    _log(
+        f"cuda={cuda} use_4bit={use_4bit} dtype={dtype} "
+        f"estimate_load≈{need / 1e9:.1f} ГБ available_ram≈{avail_s}"
+    )
+    if avail is not None and need > avail:
+        raise RuntimeError(
+            f"Не хватает RAM для загрузки {model_src}: "
+            f"оценка ~{need / 1e9:.1f} ГБ, доступно ~{avail / 1e9:.1f} ГБ. "
+            "Закрой лишние программы, убедись что чат-GGUF выгружен, "
+            "поставь CUDA + bitsandbytes, либо укажи меньшую HF-базу "
+            "(override_hf_base в data/finetune/lineage.json)."
+        )
 
-    model = AutoModelForCausalLM.from_pretrained(model_src, **load_kwargs)
+    if cuda and not use_4bit:
+        load_kwargs["device_map"] = "auto"
+    elif not cuda:
+        # CPU: не тянем всё сразу через device_map без нужды
+        load_kwargs.pop("device_map", None)
+
+    try:
+        model = AutoModelForCausalLM.from_pretrained(model_src, **load_kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Не удалось загрузить {model_src}: {exc}. "
+            f"Память: нужно≈{need / 1e9:.1f} ГБ, доступно≈{avail_s}."
+        ) from exc
     if use_4bit:
         from peft import prepare_model_for_kbit_training
 
@@ -164,6 +233,13 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     )
     model = get_peft_model(model, lora)
     model.print_trainable_parameters()
+    if not cuda:
+        try:
+            model.enable_input_require_grads()
+            model.gradient_checkpointing_enable()
+            _log("CPU: gradient checkpointing включён")
+        except Exception as exc:
+            _log(f"gradient_checkpointing skip: {exc}")
 
     def tok_map(batch: dict[str, list[str]]) -> dict[str, Any]:
         texts = [
@@ -199,11 +275,13 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
         learning_rate=lr,
         logging_steps=max(1, max_steps // 10),
         save_steps=max_steps,
-        fp16=torch.cuda.is_available() and not use_4bit,
+        fp16=cuda and not use_4bit,
         bf16=False,
+        gradient_checkpointing=not cuda,
         report_to=[],
         remove_unused_columns=False,
         optim="paged_adamw_8bit" if use_4bit else "adamw_torch",
+        dataloader_pin_memory=cuda,
     )
     collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
     trainer = Trainer(

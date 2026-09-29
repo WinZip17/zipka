@@ -81,6 +81,9 @@ export default function App() {
   const loadingOlderRef = useRef(false);
   const hasMoreRef = useRef(false);
   const oldestRef = useRef<number | null>(null);
+  const statusRef = useRef<StatusResponse | null>(null);
+  const finetuneBusy =
+    status?.finetune?.state === "running";
 
   const addBubble = useCallback(
     (
@@ -111,6 +114,7 @@ export default function App() {
     try {
       const [st, pend] = await Promise.all([fetchStatus(), fetchPending()]);
       setStatus(st);
+      statusRef.current = st;
       setPending(pend.pending ?? null);
     } catch {
       /* ignore */
@@ -200,6 +204,10 @@ export default function App() {
     })();
     const statusTimer = window.setInterval(() => void refreshStatus(), 15000);
     const newsTimer = window.setInterval(async () => {
+      if (statusRef.current?.finetune?.state === "running") {
+        setNewsThinking(null);
+        return;
+      }
       try {
         const auto = await fetchNewsAuto();
         setNewsThinking(
@@ -210,6 +218,7 @@ export default function App() {
       }
     }, 2500);
     const pingTimer = window.setInterval(async () => {
+      if (statusRef.current?.finetune?.state === "running") return;
       try {
         const data = await proactivePing();
         if (data.message) addBubble(data.message, "bot");
@@ -227,7 +236,7 @@ export default function App() {
   }, [addBubble, loadInitialHistory, refreshStatus]);
 
   const onSend = async (message: string) => {
-    if (busy) return;
+    if (busy || statusRef.current?.finetune?.state === "running") return;
     setBusy(true);
     const activeReply = replyTo;
     setReplyTo(null);
@@ -362,11 +371,15 @@ export default function App() {
             hasMore={hasMore}
             loadingOlder={loadingOlder}
             onLoadOlder={() => void loadOlderHistory()}
-            thinking={thinking || (!busy ? newsThinking : null)}
+            thinking={
+              finetuneBusy
+                ? "Идёт дообучение…"
+                : thinking || (!busy ? newsThinking : null)
+            }
             onReply={(b) => setReplyTo(b)}
           />
           <Composer
-            disabled={busy}
+            disabled={busy || finetuneBusy}
             stagedFile={stagedFile}
             onStageFile={setStagedFile}
             onSend={(msg) => void onSend(msg)}
