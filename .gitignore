@@ -40,6 +40,8 @@ data/persona/persona.yaml
 data/models/*.gguf
 data/models/**/*.gguf
 !data/models/README.md
+data/finetune/jobs/
+data/finetune/status.json
 .wheels/
 
 # any accidental local dumps
