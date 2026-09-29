@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -17,9 +21,36 @@ from zipka.system_limits import format_bytes, max_book_bytes
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "frontend" / "dist"
+_log = logging.getLogger("zipka.web")
 
-app = FastAPI(title="Zipka", version="0.2.0")
 agent = Zipka()
+_news_stop = threading.Event()
+
+
+def _news_scheduler_loop() -> None:
+    while True:
+        try:
+            busy = agent.is_chat_busy()
+            agent.news.maybe_auto_ingest(chat_busy=busy)
+        except Exception as exc:
+            _log.warning("news auto-ingest: %s", exc)
+        if _news_stop.wait(20):
+            break
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _news_stop.clear()
+    threading.Thread(
+        target=_news_scheduler_loop,
+        name="zipka-news-auto",
+        daemon=True,
+    ).start()
+    yield
+    _news_stop.set()
+
+
+app = FastAPI(title="Zipka", version="0.2.0", lifespan=lifespan)
 
 
 class ChatIn(BaseModel):
@@ -334,13 +365,22 @@ def api_finetune_start() -> dict:
 
 
 class NewsSourcesIn(BaseModel):
-    rss: list[str] | None = None
-    telegram: list[str] | None = None
+    global_interval_min: int | str | None = None
+    rss: list[Any] | None = None
+    telegram: list[Any] | None = None
 
 
 class NewsAddIn(BaseModel):
     rss: str | None = None
     telegram: str | None = None
+    interval: str | int | None = "global"
+
+
+class NewsIntervalIn(BaseModel):
+    global_interval_min: int | str | None = None
+    rss: str | None = None
+    telegram: str | None = None
+    interval: str | int | None = None
 
 
 @app.get("/api/news/sources")
@@ -348,37 +388,77 @@ def api_news_sources() -> dict:
     return {
         "sources": agent.news.load_sources(),
         "items": len(agent.news.load_items()),
+        "auto": agent.news.auto_status(),
     }
 
 
 @app.put("/api/news/sources")
 def api_news_sources_put(body: NewsSourcesIn) -> dict:
     current = agent.news.load_sources()
+    if "global_interval_min" in body.model_fields_set:
+        current["global_interval_min"] = body.global_interval_min
     if body.rss is not None:
         current["rss"] = body.rss
     if body.telegram is not None:
         current["telegram"] = body.telegram
-    return {"sources": agent.news.save_sources(current)}
+    return {
+        "sources": agent.news.save_sources(current),
+        "auto": agent.news.auto_status(),
+    }
 
 
 @app.post("/api/news/sources/add")
 def api_news_sources_add(body: NewsAddIn) -> dict:
     try:
         if body.rss:
-            sources = agent.news.add_rss(body.rss)
+            sources = agent.news.add_rss(body.rss, interval=body.interval or "global")
         elif body.telegram:
-            sources = agent.news.add_telegram(body.telegram)
+            sources = agent.news.add_telegram(
+                body.telegram, interval=body.interval or "global"
+            )
         else:
             raise HTTPException(400, "Укажи rss или telegram")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"sources": sources}
+    return {"sources": sources, "auto": agent.news.auto_status()}
+
+
+@app.post("/api/news/schedule")
+def api_news_schedule(body: NewsIntervalIn) -> dict:
+    try:
+        dump = body.model_dump(exclude_unset=True)
+        if body.rss or body.telegram:
+            sources = agent.news.set_source_interval(
+                rss=body.rss,
+                telegram=body.telegram,
+                interval=body.interval if body.interval is not None else "global",
+            )
+        elif "global_interval_min" in dump:
+            sources = agent.news.set_global_interval(dump.get("global_interval_min"))
+        else:
+            raise HTTPException(
+                400, "Укажи global_interval_min или rss/telegram + interval"
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"sources": sources, "auto": agent.news.auto_status()}
+
+
+@app.get("/api/news/auto")
+def api_news_auto() -> dict:
+    return agent.news.auto_status()
 
 
 @app.post("/api/news/ingest")
 def api_news_ingest() -> dict:
     try:
+        if agent.is_chat_busy():
+            raise HTTPException(409, "Сейчас идёт ответ в чате — подожди и обнови ленту снова")
         return agent.news.ingest()
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 

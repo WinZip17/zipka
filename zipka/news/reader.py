@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -124,6 +125,31 @@ def telegram_message_url(channel: str, post_id: str | int | None) -> str:
     return f"https://t.me/{ch}/{post_id}"
 
 
+INTERVAL_MINUTES: tuple[int, ...] = (60, 120, 180, 240, 360, 720, 1440)
+INTERVAL_OPTIONS: list[dict[str, Any]] = [
+    {"value": "off", "label": "выкл", "minutes": None},
+    {"value": 60, "label": "1ч", "minutes": 60},
+    {"value": 120, "label": "2ч", "minutes": 120},
+    {"value": 180, "label": "3ч", "minutes": 180},
+    {"value": 240, "label": "4ч", "minutes": 240},
+    {"value": 360, "label": "6ч", "minutes": 360},
+    {"value": 720, "label": "12ч", "minutes": 720},
+    {"value": 1440, "label": "1д", "minutes": 1440},
+]
+SOURCE_INTERVAL_OPTIONS: list[dict[str, Any]] = [
+    {"value": "global", "label": "как глобально", "minutes": None},
+    *INTERVAL_OPTIONS,
+]
+
+
+def _rss_key(url: str) -> str:
+    return f"rss:{url}"
+
+
+def _tg_key(channel: str) -> str:
+    return f"tg:{channel}"
+
+
 class NewsDesk:
     """Источники новостей, ingest выдержек, поиск по периоду."""
 
@@ -141,8 +167,20 @@ class NewsDesk:
         self.root.mkdir(parents=True, exist_ok=True)
         self.sources_path = self.root / "sources.json"
         self.items_path = self.root / "items.jsonl"
+        self._ingest_lock = threading.Lock()
+        self._auto_running = False
+        self._auto_phase = ""
+        self._pending_after_chat = False
+        self._last_auto_result: dict[str, Any] | None = None
         if not self.sources_path.exists():
-            self.save_sources({"rss": [], "telegram": [], "updated_at": _utc_iso()})
+            self.save_sources(
+                {
+                    "global_interval_min": None,
+                    "rss": [],
+                    "telegram": [],
+                    "last_fetch": {},
+                }
+            )
 
     def load_sources(self) -> dict[str, Any]:
         try:
@@ -151,65 +189,259 @@ class NewsDesk:
             data = {}
         if not isinstance(data, dict):
             data = {}
-        data.setdefault("rss", [])
-        data.setdefault("telegram", [])
-        data["rss"] = [str(x).strip() for x in data["rss"] if str(x).strip()]
-        data["telegram"] = [
-            normalize_telegram(str(x)) or str(x).strip().lstrip("@")
-            for x in data["telegram"]
-            if str(x).strip()
-        ]
-        # unique preserve order
-        data["rss"] = list(dict.fromkeys(data["rss"]))
-        data["telegram"] = list(dict.fromkeys([t for t in data["telegram"] if t]))
-        return data
+        return self._normalize_sources(data)
+
+    def _normalize_sources(self, data: dict[str, Any]) -> dict[str, Any]:
+        global_iv = self._parse_global_interval(data.get("global_interval_min"))
+        last_fetch = data.get("last_fetch") if isinstance(data.get("last_fetch"), dict) else {}
+        last_fetch = {str(k): str(v) for k, v in last_fetch.items() if v}
+
+        rss_out: list[dict[str, Any]] = []
+        seen_rss: set[str] = set()
+        for item in data.get("rss") or []:
+            if isinstance(item, str):
+                url = item.strip()
+                interval: Any = "global"
+            elif isinstance(item, dict):
+                url = str(item.get("url") or "").strip()
+                interval = self._parse_source_interval(item.get("interval"))
+            else:
+                continue
+            if not url or url in seen_rss:
+                continue
+            seen_rss.add(url)
+            rss_out.append({"url": url, "interval": interval})
+
+        tg_out: list[dict[str, Any]] = []
+        seen_tg: set[str] = set()
+        for item in data.get("telegram") or []:
+            if isinstance(item, str):
+                ch = normalize_telegram(item) or item.strip().lstrip("@")
+                interval = "global"
+            elif isinstance(item, dict):
+                raw = str(item.get("id") or item.get("channel") or "").strip()
+                ch = normalize_telegram(raw) or raw.lstrip("@")
+                interval = self._parse_source_interval(item.get("interval"))
+            else:
+                continue
+            if not ch or ch in seen_tg:
+                continue
+            seen_tg.add(ch)
+            tg_out.append({"id": ch, "interval": interval})
+
+        return {
+            "global_interval_min": global_iv,
+            "rss": rss_out,
+            "telegram": tg_out,
+            "last_fetch": last_fetch,
+            "updated_at": data.get("updated_at") or _utc_iso(),
+        }
+
+    @staticmethod
+    def _parse_global_interval(raw: Any) -> int | None:
+        if raw is None or raw == "" or raw == "off":
+            return None
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return n if n in INTERVAL_MINUTES else None
+
+    @staticmethod
+    def _parse_source_interval(raw: Any) -> Any:
+        if raw is None or raw == "" or raw == "global":
+            return "global"
+        if raw == "off":
+            return "off"
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return "global"
+        return n if n in INTERVAL_MINUTES else "global"
 
     def save_sources(self, data: dict[str, Any]) -> dict[str, Any]:
-        payload = {
-            "rss": list(dict.fromkeys([str(x).strip() for x in (data.get("rss") or []) if str(x).strip()])),
-            "telegram": list(
-                dict.fromkeys(
-                    [
-                        normalize_telegram(str(x)) or str(x).strip().lstrip("@")
-                        for x in (data.get("telegram") or [])
-                        if str(x).strip()
-                    ]
-                )
-            ),
-            "updated_at": _utc_iso(),
-        }
-        payload["telegram"] = [t for t in payload["telegram"] if t]
+        normalized = self._normalize_sources(data)
+        normalized["updated_at"] = _utc_iso()
         self.sources_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        return payload
+        return normalized
 
-    def add_rss(self, url: str) -> dict[str, Any]:
+    def add_rss(self, url: str, *, interval: Any = "global") -> dict[str, Any]:
         url = (url or "").strip()
         if not url.startswith(("http://", "https://")):
             raise ValueError("RSS URL должен начинаться с http(s)://")
         src = self.load_sources()
-        if url not in src["rss"]:
-            src["rss"].append(url)
+        if not any(x["url"] == url for x in src["rss"]):
+            src["rss"].append(
+                {"url": url, "interval": self._parse_source_interval(interval)}
+            )
         return self.save_sources(src)
 
-    def add_telegram(self, raw: str) -> dict[str, Any]:
+    def add_telegram(self, raw: str, *, interval: Any = "global") -> dict[str, Any]:
         channel = normalize_telegram(raw)
         if not channel:
             raise ValueError("Нужен @channel или https://t.me/channel")
         src = self.load_sources()
-        if channel not in src["telegram"]:
-            src["telegram"].append(channel)
+        if not any(x["id"] == channel for x in src["telegram"]):
+            src["telegram"].append(
+                {
+                    "id": channel,
+                    "interval": self._parse_source_interval(interval),
+                }
+            )
         return self.save_sources(src)
 
-    def remove_source(self, *, rss: str | None = None, telegram: str | None = None) -> dict[str, Any]:
+    def remove_source(
+        self, *, rss: str | None = None, telegram: str | None = None
+    ) -> dict[str, Any]:
         src = self.load_sources()
         if rss:
-            src["rss"] = [u for u in src["rss"] if u != rss.strip()]
+            url = rss.strip()
+            src["rss"] = [x for x in src["rss"] if x["url"] != url]
+            src["last_fetch"].pop(_rss_key(url), None)
         if telegram:
             ch = normalize_telegram(telegram) or telegram.strip().lstrip("@")
-            src["telegram"] = [t for t in src["telegram"] if t != ch]
+            src["telegram"] = [x for x in src["telegram"] if x["id"] != ch]
+            src["last_fetch"].pop(_tg_key(ch), None)
         return self.save_sources(src)
+
+    def set_global_interval(self, value: Any) -> dict[str, Any]:
+        src = self.load_sources()
+        src["global_interval_min"] = self._parse_global_interval(value)
+        return self.save_sources(src)
+
+    def set_source_interval(
+        self,
+        *,
+        rss: str | None = None,
+        telegram: str | None = None,
+        interval: Any = "global",
+    ) -> dict[str, Any]:
+        src = self.load_sources()
+        iv = self._parse_source_interval(interval)
+        if rss:
+            url = rss.strip()
+            for item in src["rss"]:
+                if item["url"] == url:
+                    item["interval"] = iv
+                    break
+        if telegram:
+            ch = normalize_telegram(telegram) or telegram.strip().lstrip("@")
+            for item in src["telegram"]:
+                if item["id"] == ch:
+                    item["interval"] = iv
+                    break
+        return self.save_sources(src)
+
+    def effective_interval_min(self, entry: dict[str, Any], global_min: int | None) -> int | None:
+        iv = entry.get("interval", "global")
+        if iv == "off":
+            return None
+        if iv == "global":
+            return global_min
+        try:
+            n = int(iv)
+        except (TypeError, ValueError):
+            return global_min
+        return n if n in INTERVAL_MINUTES else global_min
+
+    def list_due_sources(self, *, now: datetime | None = None) -> list[dict[str, Any]]:
+        now = now or _utc_now()
+        src = self.load_sources()
+        global_min = src.get("global_interval_min")
+        last = src.get("last_fetch") or {}
+        due: list[dict[str, Any]] = []
+
+        for item in src["rss"]:
+            minutes = self.effective_interval_min(item, global_min)
+            if minutes is None:
+                continue
+            key = _rss_key(item["url"])
+            prev = _parse_dt(last.get(key))
+            if prev is None or (now - prev) >= timedelta(minutes=minutes):
+                due.append({"kind": "rss", "id": item["url"], "key": key, "minutes": minutes})
+
+        for item in src["telegram"]:
+            minutes = self.effective_interval_min(item, global_min)
+            if minutes is None:
+                continue
+            key = _tg_key(item["id"])
+            prev = _parse_dt(last.get(key))
+            if prev is None or (now - prev) >= timedelta(minutes=minutes):
+                due.append(
+                    {
+                        "kind": "telegram",
+                        "id": item["id"],
+                        "key": key,
+                        "minutes": minutes,
+                    }
+                )
+        return due
+
+    def mark_fetched(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        src = self.load_sources()
+        stamp = _utc_iso()
+        for key in keys:
+            src["last_fetch"][key] = stamp
+        self.save_sources(src)
+
+    def auto_status(self) -> dict[str, Any]:
+        due = self.list_due_sources()
+        return {
+            "running": self._auto_running,
+            "phase": self._auto_phase or None,
+            "message": "Обновляю новости…" if self._auto_running else None,
+            "pending_after_chat": self._pending_after_chat,
+            "due_count": len(due),
+            "due": due[:12],
+            "last_result": self._last_auto_result,
+            "interval_options": INTERVAL_OPTIONS,
+            "source_interval_options": SOURCE_INTERVAL_OPTIONS,
+        }
+
+    def on_chat_idle(self) -> None:
+        """Вызвать после ответа в чате: если ждали — запустить due."""
+        if self._auto_running:
+            return
+        due = self.list_due_sources()
+        if self._pending_after_chat or due:
+            self._pending_after_chat = False
+            self.maybe_auto_ingest(chat_busy=False)
+
+    def maybe_auto_ingest(self, *, chat_busy: bool) -> dict[str, Any] | None:
+        due = self.list_due_sources()
+        if not due:
+            self._pending_after_chat = False
+            return None
+        if chat_busy:
+            self._pending_after_chat = True
+            return None
+        if self._auto_running:
+            return None
+        try:
+            rss_urls = [d["id"] for d in due if d["kind"] == "rss"]
+            tg_ids = [d["id"] for d in due if d["kind"] == "telegram"]
+            result = self.ingest(rss_urls=rss_urls, telegram_ids=tg_ids)
+            result["auto"] = True
+            result["due"] = due
+            self._last_auto_result = {
+                "at": _utc_iso(),
+                "added": result.get("added"),
+                "errors": result.get("errors"),
+            }
+            self._pending_after_chat = False
+            return result
+        except RuntimeError as exc:
+            if "уже идёт" in str(exc).lower():
+                return None
+            self._last_auto_result = {"at": _utc_iso(), "error": str(exc)}
+            raise
+        except Exception as exc:
+            self._last_auto_result = {"at": _utc_iso(), "error": str(exc)}
+            raise
 
     def known_ids(self) -> set[str]:
         ids: set[str] = set()
@@ -444,101 +676,130 @@ class NewsDesk:
         *,
         per_source: int = 10,
         max_new: int = 40,
+        rss_urls: list[str] | None = None,
+        telegram_ids: list[str] | None = None,
+        mark_fetch: bool = True,
     ) -> dict[str, Any]:
         src = self.load_sources()
-        if not src["rss"] and not src["telegram"]:
+        rss_list = [x["url"] for x in src["rss"]]
+        tg_list = [x["id"] for x in src["telegram"]]
+        if rss_urls is not None:
+            want = set(rss_urls)
+            rss_list = [u for u in rss_list if u in want]
+        if telegram_ids is not None:
+            want_tg = set(telegram_ids)
+            tg_list = [c for c in tg_list if c in want_tg]
+
+        if not rss_list and not tg_list:
             raise RuntimeError(
                 "Нет источников. Добавь RSS или Telegram в настройках / "
                 "«добавь rss …» / «добавь телеграм @channel»."
             )
-        known = self.known_ids()
-        added: list[dict[str, Any]] = []
-        errors: list[str] = []
 
-        candidates: list[dict[str, Any]] = []
-        for feed in src["rss"]:
-            try:
-                candidates.extend(self.fetch_rss_entries(feed, limit=per_source))
-            except Exception as exc:
-                errors.append(f"RSS {feed}: {exc}")
-        for channel in src["telegram"]:
-            try:
-                candidates.extend(
-                    self.fetch_telegram_entries(channel, limit=per_source)
+        if not self._ingest_lock.acquire(blocking=False):
+            raise RuntimeError("Уже идёт обновление новостей.")
+        self._auto_running = True
+        self._auto_phase = "ingest"
+
+        try:
+            known = self.known_ids()
+            added: list[dict[str, Any]] = []
+            errors: list[str] = []
+            fetched_keys: list[str] = []
+
+            candidates: list[dict[str, Any]] = []
+            for feed in rss_list:
+                try:
+                    candidates.extend(self.fetch_rss_entries(feed, limit=per_source))
+                    fetched_keys.append(_rss_key(feed))
+                except Exception as exc:
+                    errors.append(f"RSS {feed}: {exc}")
+            for channel in tg_list:
+                try:
+                    candidates.extend(
+                        self.fetch_telegram_entries(channel, limit=per_source)
+                    )
+                    fetched_keys.append(_tg_key(channel))
+                except Exception as exc:
+                    errors.append(f"TG @{channel}: {exc}")
+
+            for cand in candidates:
+                if len(added) >= max_new:
+                    break
+                iid = item_id(
+                    str(cand.get("source") or ""),
+                    str(cand.get("link") or ""),
+                    str(cand.get("title") or ""),
                 )
-            except Exception as exc:
-                errors.append(f"TG @{channel}: {exc}")
-
-        for cand in candidates:
-            if len(added) >= max_new:
-                break
-            iid = item_id(
-                str(cand.get("source") or ""),
-                str(cand.get("link") or ""),
-                str(cand.get("title") or ""),
-            )
-            if iid in known:
-                continue
-            body = str(cand.get("body") or "").strip()
-            title = str(cand.get("title") or "").strip()
-            source_url = normalize_http_url(
-                cand.get("source_url") or cand.get("link") or cand.get("url")
-            )
-            if not source_url:
-                continue  # обязателен первоисточник
-            if len(body) < 20 and len(title) < 8:
-                continue
-            summary = self._summarize_piece(
-                title=title,
-                body=body or title,
-                source=str(cand.get("source") or ""),
-            )
-            item = {
-                "id": iid,
-                "kind": cand.get("kind"),
-                "source": cand.get("source"),
-                "title": title,
-                "url": source_url,
-                "source_url": source_url,
-                "published_at": cand.get("published_at"),
-                "fetched_at": _utc_iso(),
-                "summary": summary,
-                "text": (body or title)[:2500],
-            }
-            self.append_item(item)
-            known.add(iid)
-            added.append(item)
-            self.memory.add_note(
-                "news",
-                f"{summary}\nПервоисточник: {source_url}",
-                meta={
+                if iid in known:
+                    continue
+                body = str(cand.get("body") or "").strip()
+                title = str(cand.get("title") or "").strip()
+                source_url = normalize_http_url(
+                    cand.get("source_url") or cand.get("link") or cand.get("url")
+                )
+                if not source_url:
+                    continue
+                if len(body) < 20 and len(title) < 8:
+                    continue
+                summary = self._summarize_piece(
+                    title=title,
+                    body=body or title,
+                    source=str(cand.get("source") or ""),
+                )
+                item = {
                     "id": iid,
-                    "source": item["source"],
+                    "kind": cand.get("kind"),
+                    "source": cand.get("source"),
+                    "title": title,
                     "url": source_url,
                     "source_url": source_url,
-                    "title": title,
-                    "published_at": item.get("published_at"),
-                },
-            )
-
-        return {
-            "ok": True,
-            "added": len(added),
-            "sources": {
-                "rss": len(src["rss"]),
-                "telegram": len(src["telegram"]),
-            },
-            "errors": errors,
-            "items": [
-                {
-                    "title": x["title"],
-                    "source": x["source"],
-                    "summary": x["summary"],
-                    "url": x.get("url"),
+                    "published_at": cand.get("published_at"),
+                    "fetched_at": _utc_iso(),
+                    "summary": summary,
+                    "text": (body or title)[:2500],
                 }
-                for x in added[:12]
-            ],
-        }
+                self.append_item(item)
+                known.add(iid)
+                added.append(item)
+                self.memory.add_note(
+                    "news",
+                    f"{summary}\nПервоисточник: {source_url}",
+                    meta={
+                        "id": iid,
+                        "source": item["source"],
+                        "url": source_url,
+                        "source_url": source_url,
+                        "title": title,
+                        "published_at": item.get("published_at"),
+                    },
+                )
+
+            if mark_fetch and fetched_keys:
+                self.mark_fetched(fetched_keys)
+
+            return {
+                "ok": True,
+                "added": len(added),
+                "sources": {
+                    "rss": len(rss_list),
+                    "telegram": len(tg_list),
+                },
+                "errors": errors,
+                "items": [
+                    {
+                        "title": x["title"],
+                        "source": x["source"],
+                        "summary": x["summary"],
+                        "url": x.get("url"),
+                    }
+                    for x in added[:12]
+                ],
+            }
+        finally:
+            self._auto_running = False
+            self._auto_phase = ""
+            self._ingest_lock.release()
 
     def search(
         self,
@@ -701,9 +962,20 @@ class NewsDesk:
 
         if "покажи источники" in low or "источники новостей" in low:
             src = self.load_sources()
-            rss = "\n".join(f"- {u}" for u in src["rss"]) or "- (нет)"
-            tg = "\n".join(f"- @{c}" for c in src["telegram"]) or "- (нет)"
-            return f"RSS:\n{rss}\n\nTelegram:\n{tg}"
+            g = src.get("global_interval_min")
+            g_label = "выкл" if not g else f"{g} мин"
+            lines = [f"Глобальный интервал: {g_label}", "", "RSS:"]
+            if not src["rss"]:
+                lines.append("- (нет)")
+            for item in src["rss"]:
+                lines.append(f"- {item['url']} [{item.get('interval', 'global')}]")
+            lines.append("")
+            lines.append("Telegram:")
+            if not src["telegram"]:
+                lines.append("- (нет)")
+            for item in src["telegram"]:
+                lines.append(f"- @{item['id']} [{item.get('interval', 'global')}]")
+            return "\n".join(lines)
 
         m_rss = re.search(
             r"(?i)добавь\s+rss\s+(\S+)|rss\s*[:=]\s*(\S+)",

@@ -48,8 +48,12 @@ import {
   sendChat,
   setCompute,
   setModels,
+  setNewsSchedule,
   startFinetune,
   type FinetuneStatusResponse,
+  type NewsIntervalOption,
+  type NewsRssSource,
+  type NewsTelegramSource,
   type StatusResponse,
 } from "../api";
 
@@ -79,6 +83,17 @@ function SectionTitle({ children }: { children: ReactNode }) {
       {children}
     </Typography>
   );
+}
+
+function intervalSelectValue(raw: string | number | null | undefined): string {
+  if (raw === null || raw === undefined || raw === "") return "off";
+  return String(raw);
+}
+
+function parseIntervalChoice(value: string): string | number {
+  if (value === "off" || value === "global") return value;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : "global";
 }
 
 function InfoBlock({ title, children }: { title: string; children: ReactNode }) {
@@ -175,8 +190,24 @@ export function SidePanel({
   );
   const [newsRss, setNewsRss] = useState("");
   const [newsTg, setNewsTg] = useState("");
-  const [newsRssList, setNewsRssList] = useState<string[]>([]);
-  const [newsTgList, setNewsTgList] = useState<string[]>([]);
+  const [newsRssList, setNewsRssList] = useState<NewsRssSource[]>([]);
+  const [newsTgList, setNewsTgList] = useState<NewsTelegramSource[]>([]);
+  const [newsGlobalInterval, setNewsGlobalInterval] = useState("off");
+  const [newsIntervalOptions, setNewsIntervalOptions] = useState<
+    NewsIntervalOption[]
+  >([
+    { value: "off", label: "выкл" },
+    { value: 60, label: "1ч" },
+    { value: 120, label: "2ч" },
+    { value: 180, label: "3ч" },
+    { value: 240, label: "4ч" },
+    { value: 360, label: "6ч" },
+    { value: 720, label: "12ч" },
+    { value: 1440, label: "1д" },
+  ]);
+  const [newsSourceIntervalOptions, setNewsSourceIntervalOptions] = useState<
+    NewsIntervalOption[]
+  >([{ value: "global", label: "как глобально" }, { value: "off", label: "выкл" }]);
   const [newsItems, setNewsItems] = useState(0);
   const [newsBusy, setNewsBusy] = useState(false);
   const [newsMsg, setNewsMsg] = useState<string | null>(null);
@@ -217,9 +248,28 @@ export function SidePanel({
   const refreshNews = async () => {
     try {
       const data = await fetchNewsSources();
-      setNewsRssList(data.sources?.rss || []);
-      setNewsTgList(data.sources?.telegram || []);
+      const rss = (data.sources?.rss || []).map((item) =>
+        typeof item === "string"
+          ? { url: item, interval: "global" as const }
+          : { url: item.url, interval: item.interval ?? "global" },
+      );
+      const tg = (data.sources?.telegram || []).map((item) =>
+        typeof item === "string"
+          ? { id: item, interval: "global" as const }
+          : { id: item.id, interval: item.interval ?? "global" },
+      );
+      setNewsRssList(rss);
+      setNewsTgList(tg);
+      setNewsGlobalInterval(
+        intervalSelectValue(data.sources?.global_interval_min ?? "off"),
+      );
       setNewsItems(data.items || 0);
+      if (data.auto?.interval_options?.length) {
+        setNewsIntervalOptions(data.auto.interval_options);
+      }
+      if (data.auto?.source_interval_options?.length) {
+        setNewsSourceIntervalOptions(data.auto.source_interval_options);
+      }
       return data;
     } catch (err) {
       setNewsMsg(err instanceof Error ? err.message : String(err));
@@ -322,7 +372,7 @@ export function SidePanel({
     setNewsBusy(true);
     setNewsMsg(null);
     try {
-      const next = newsRssList.filter((u) => u !== url);
+      const next = newsRssList.filter((u) => u.url !== url);
       await saveNewsSources({ rss: next, telegram: newsTgList });
       await refreshNews();
     } catch (err) {
@@ -336,8 +386,56 @@ export function SidePanel({
     setNewsBusy(true);
     setNewsMsg(null);
     try {
-      const next = newsTgList.filter((c) => c !== ch);
+      const next = newsTgList.filter((c) => c.id !== ch);
       await saveNewsSources({ rss: newsRssList, telegram: next });
+      await refreshNews();
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+    }
+  };
+
+  const onGlobalInterval = async (value: string) => {
+    setNewsBusy(true);
+    setNewsMsg(null);
+    try {
+      setNewsGlobalInterval(value);
+      await setNewsSchedule({
+        global_interval_min: value === "off" ? "off" : parseIntervalChoice(value),
+      });
+      await refreshNews();
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+    }
+  };
+
+  const onRssInterval = async (url: string, value: string) => {
+    setNewsBusy(true);
+    setNewsMsg(null);
+    try {
+      await setNewsSchedule({
+        rss: url,
+        interval: parseIntervalChoice(value),
+      });
+      await refreshNews();
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+    }
+  };
+
+  const onTgInterval = async (ch: string, value: string) => {
+    setNewsBusy(true);
+    setNewsMsg(null);
+    try {
+      await setNewsSchedule({
+        telegram: ch,
+        interval: parseIntervalChoice(value),
+      });
       await refreshNews();
     } catch (err) {
       setNewsMsg(err instanceof Error ? err.message : String(err));
@@ -1341,6 +1439,24 @@ export function SidePanel({
                 Выдержек: {newsItems || status?.news?.items || 0}. В чате можно спросить:
                 «были упоминания про Озон за неделю?»
               </Typography>
+              <FormControl size="small" fullWidth sx={{ mb: 1.25 }}>
+                <InputLabel id="news-global-interval-label">
+                  Автообновление
+                </InputLabel>
+                <Select
+                  labelId="news-global-interval-label"
+                  label="Автообновление"
+                  value={newsGlobalInterval}
+                  disabled={busy || newsBusy}
+                  onChange={(e) => void onGlobalInterval(String(e.target.value))}
+                >
+                  {newsIntervalOptions.map((opt) => (
+                    <MenuItem key={`g-${opt.value}`} value={String(opt.value)}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
               <Stack spacing={1} sx={{ mb: 1.25 }}>
                 <Stack direction="row" spacing={1}>
                   <TextField
@@ -1383,7 +1499,7 @@ export function SidePanel({
                 <Box
                   sx={{
                     mb: 1.25,
-                    maxHeight: 160,
+                    maxHeight: 220,
                     overflow: "auto",
                     border: 1,
                     borderColor: "divider",
@@ -1394,22 +1510,40 @@ export function SidePanel({
                 >
                   {newsRssList.map((u) => (
                     <Stack
-                      key={`rss-${u}`}
+                      key={`rss-${u.url}`}
                       direction="row"
-                      spacing={1}
-                      sx={{ alignItems: "center", mb: 0.35 }}
+                      spacing={0.75}
+                      sx={{ alignItems: "center", mb: 0.5 }}
                     >
                       <Typography
                         variant="caption"
-                        sx={{ flex: 1, wordBreak: "break-all" }}
+                        sx={{ flex: 1, wordBreak: "break-all", minWidth: 0 }}
                       >
-                        RSS: {u}
+                        RSS: {u.url}
                       </Typography>
+                      <FormControl size="small" sx={{ minWidth: 118 }}>
+                        <Select
+                          value={intervalSelectValue(u.interval ?? "global")}
+                          disabled={newsBusy}
+                          onChange={(e) =>
+                            void onRssInterval(u.url, String(e.target.value))
+                          }
+                        >
+                          {newsSourceIntervalOptions.map((opt) => (
+                            <MenuItem
+                              key={`rss-iv-${u.url}-${opt.value}`}
+                              value={String(opt.value)}
+                            >
+                              {opt.label}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
                       <Button
                         size="small"
                         color="inherit"
                         disabled={newsBusy}
-                        onClick={() => void onRemoveRss(u)}
+                        onClick={() => void onRemoveRss(u.url)}
                       >
                         ×
                       </Button>
@@ -1417,19 +1551,40 @@ export function SidePanel({
                   ))}
                   {newsTgList.map((c) => (
                     <Stack
-                      key={`tg-${c}`}
+                      key={`tg-${c.id}`}
                       direction="row"
-                      spacing={1}
-                      sx={{ alignItems: "center", mb: 0.35 }}
+                      spacing={0.75}
+                      sx={{ alignItems: "center", mb: 0.5 }}
                     >
-                      <Typography variant="caption" sx={{ flex: 1 }}>
-                        TG: @{c}
+                      <Typography
+                        variant="caption"
+                        sx={{ flex: 1, minWidth: 0 }}
+                      >
+                        TG: @{c.id}
                       </Typography>
+                      <FormControl size="small" sx={{ minWidth: 118 }}>
+                        <Select
+                          value={intervalSelectValue(c.interval ?? "global")}
+                          disabled={newsBusy}
+                          onChange={(e) =>
+                            void onTgInterval(c.id, String(e.target.value))
+                          }
+                        >
+                          {newsSourceIntervalOptions.map((opt) => (
+                            <MenuItem
+                              key={`tg-iv-${c.id}-${opt.value}`}
+                              value={String(opt.value)}
+                            >
+                              {opt.label}
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
                       <Button
                         size="small"
                         color="inherit"
                         disabled={newsBusy}
-                        onClick={() => void onRemoveTg(c)}
+                        onClick={() => void onRemoveTg(c.id)}
                       >
                         ×
                       </Button>
@@ -1479,6 +1634,8 @@ export function SidePanel({
                   <Typography variant="caption" color="text.secondary" component="div">
                     Источники → обновление ленты → выдержки с ссылкой на первоисточник.
                     Telegram только публичные каналы (<code>t.me/s/…</code>).
+                    Автообновление работает, пока запущена Зипка; по умолчанию выкл.
+                    Пока идёт ответ в чате — обновление ждёт и стартует после.
                   </Typography>
                 </AccordionDetails>
               </Accordion>

@@ -1,5 +1,17 @@
 {
-  "rss": [],
-  "telegram": [],
-  "updated_at": "2026-09-29T04:38:47.503989+00:00"
+  "global_interval_min": null,
+  "rss": [
+    {
+      "url": "https://a.test/rss",
+      "interval": 120
+    }
+  ],
+  "telegram": [
+    {
+      "id": "bbbreaking",
+      "interval": "global"
+    }
+  ],
+  "last_fetch": {},
+  "updated_at": "2026-09-29T06:26:00.584504+00:00"
 }

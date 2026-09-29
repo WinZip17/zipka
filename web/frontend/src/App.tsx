@@ -5,6 +5,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import {
   fetchHistory,
+  fetchNewsAuto,
   fetchPending,
   fetchStatus,
   proactiveHello,
@@ -71,6 +72,7 @@ export default function App() {
   const [archiveMember, setArchiveMember] = useState("");
   const [busy, setBusy] = useState(false);
   const [thinking, setThinking] = useState<string | null>(null);
+  const [newsThinking, setNewsThinking] = useState<string | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [oldestIndex, setOldestIndex] = useState<number | null>(null);
@@ -197,6 +199,16 @@ export default function App() {
       }
     })();
     const statusTimer = window.setInterval(() => void refreshStatus(), 15000);
+    const newsTimer = window.setInterval(async () => {
+      try {
+        const auto = await fetchNewsAuto();
+        setNewsThinking(
+          auto.running && auto.message ? auto.message : null,
+        );
+      } catch {
+        /* ignore */
+      }
+    }, 2500);
     const pingTimer = window.setInterval(async () => {
       try {
         const data = await proactivePing();
@@ -209,6 +221,7 @@ export default function App() {
     return () => {
       alive = false;
       window.clearInterval(statusTimer);
+      window.clearInterval(newsTimer);
       window.clearInterval(pingTimer);
     };
   }, [addBubble, loadInitialHistory, refreshStatus]);
@@ -349,7 +362,7 @@ export default function App() {
             hasMore={hasMore}
             loadingOlder={loadingOlder}
             onLoadOlder={() => void loadOlderHistory()}
-            thinking={thinking}
+            thinking={thinking || (!busy ? newsThinking : null)}
             onReply={(b) => setReplyTo(b)}
           />
           <Composer

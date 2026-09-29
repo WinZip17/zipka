@@ -114,6 +114,10 @@ class Zipka:
         self.uploads_dir = self.settings.data_dir / "books" / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self._reset_pending = False
+        self._chat_busy = False
+
+    def is_chat_busy(self) -> bool:
+        return bool(self._chat_busy)
 
     def _code_llm(self) -> Any:
         if isinstance(self.llm, LlmRouter):
@@ -150,6 +154,7 @@ class Zipka:
         self.uploads_dir = self.settings.data_dir / "books" / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self._reset_pending = False
+        self._chat_busy = False
 
     def reset_learning(self, *, confirm: bool = False) -> dict[str, Any]:
         result = reset_learning_data(self.settings, confirm=confirm)
@@ -378,6 +383,29 @@ class Zipka:
         return messages
 
     def chat(
+        self,
+        user_text: str,
+        *,
+        auto_soft: bool = True,
+        reply_to: dict[str, Any] | None = None,
+        reply_chain: list[dict[str, Any]] | None = None,
+    ) -> str:
+        self._chat_busy = True
+        try:
+            return self._chat_inner(
+                user_text,
+                auto_soft=auto_soft,
+                reply_to=reply_to,
+                reply_chain=reply_chain,
+            )
+        finally:
+            self._chat_busy = False
+            try:
+                self.news.on_chat_idle()
+            except Exception:
+                pass
+
+    def _chat_inner(
         self,
         user_text: str,
         *,

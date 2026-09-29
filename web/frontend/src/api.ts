@@ -168,7 +168,7 @@ export type StatusResponse = {
     active_checkpoint?: string;
   };
   news?: {
-    sources?: { rss?: string[]; telegram?: string[]; updated_at?: string };
+    sources?: NewsSources;
     items?: number;
   };
   proactive?: {
@@ -470,15 +470,51 @@ export async function startFinetune() {
   return data;
 }
 
+export type NewsIntervalOption = {
+  value: string | number;
+  label: string;
+  minutes?: number | null;
+};
+
+export type NewsRssSource = {
+  url: string;
+  interval?: string | number;
+};
+
+export type NewsTelegramSource = {
+  id: string;
+  interval?: string | number;
+};
+
 export type NewsSources = {
-  rss?: string[];
-  telegram?: string[];
+  global_interval_min?: number | null;
+  rss?: Array<string | NewsRssSource>;
+  telegram?: Array<string | NewsTelegramSource>;
+  last_fetch?: Record<string, string>;
   updated_at?: string;
+};
+
+export type NewsAutoStatus = {
+  running?: boolean;
+  phase?: string | null;
+  message?: string | null;
+  pending_after_chat?: boolean;
+  due_count?: number;
+  due?: unknown[];
+  last_result?: {
+    at?: string;
+    added?: number;
+    errors?: string[];
+    error?: string;
+  } | null;
+  interval_options?: NewsIntervalOption[];
+  source_interval_options?: NewsIntervalOption[];
 };
 
 export type NewsSourcesResponse = {
   sources?: NewsSources;
   items?: number;
+  auto?: NewsAutoStatus;
 };
 
 export async function fetchNewsSources(): Promise<NewsSourcesResponse> {
@@ -486,9 +522,15 @@ export async function fetchNewsSources(): Promise<NewsSourcesResponse> {
   return parseJson(res);
 }
 
+export async function fetchNewsAuto(): Promise<NewsAutoStatus> {
+  const res = await fetch("/api/news/auto");
+  return parseJson(res);
+}
+
 export async function saveNewsSources(body: {
-  rss?: string[];
-  telegram?: string[];
+  global_interval_min?: number | string | null;
+  rss?: Array<string | NewsRssSource>;
+  telegram?: Array<string | NewsTelegramSource>;
 }): Promise<NewsSourcesResponse> {
   const res = await fetch("/api/news/sources", {
     method: "PUT",
@@ -504,9 +546,30 @@ export async function saveNewsSources(body: {
   return data;
 }
 
+export async function setNewsSchedule(body: {
+  global_interval_min?: number | string | null;
+  rss?: string;
+  telegram?: string;
+  interval?: string | number;
+}): Promise<NewsSourcesResponse> {
+  const res = await fetch("/api/news/schedule", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await parseJson<NewsSourcesResponse & { detail?: string }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string" ? data.detail : "Не удалось сохранить расписание",
+    );
+  }
+  return data;
+}
+
 export async function addNewsSource(body: {
   rss?: string;
   telegram?: string;
+  interval?: string | number;
 }): Promise<NewsSourcesResponse> {
   const res = await fetch("/api/news/sources/add", {
     method: "POST",
