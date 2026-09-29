@@ -167,6 +167,10 @@ export type StatusResponse = {
     active_gguf?: string;
     active_checkpoint?: string;
   };
+  news?: {
+    sources?: { rss?: string[]; telegram?: string[]; updated_at?: string };
+    items?: number;
+  };
   proactive?: {
     today?: string;
     used?: number;
@@ -412,6 +416,8 @@ export type FinetuneStatusResponse = {
     id?: string;
     generation?: number;
     pairs?: number;
+    chat_pairs?: number;
+    identity_pairs?: number;
     export_gguf_name?: string;
     base?: { kind?: string; hf_id?: string; path?: string };
     params?: Record<string, unknown>;
@@ -459,6 +465,76 @@ export async function startFinetune() {
   if (!res.ok) {
     throw new Error(
       typeof data.detail === "string" ? data.detail : "Не удалось запустить дообучение",
+    );
+  }
+  return data;
+}
+
+export type NewsSources = {
+  rss?: string[];
+  telegram?: string[];
+  updated_at?: string;
+};
+
+export type NewsSourcesResponse = {
+  sources?: NewsSources;
+  items?: number;
+};
+
+export async function fetchNewsSources(): Promise<NewsSourcesResponse> {
+  const res = await fetch("/api/news/sources");
+  return parseJson(res);
+}
+
+export async function saveNewsSources(body: {
+  rss?: string[];
+  telegram?: string[];
+}): Promise<NewsSourcesResponse> {
+  const res = await fetch("/api/news/sources", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await parseJson<NewsSourcesResponse & { detail?: string }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string" ? data.detail : "Не удалось сохранить источники",
+    );
+  }
+  return data;
+}
+
+export async function addNewsSource(body: {
+  rss?: string;
+  telegram?: string;
+}): Promise<NewsSourcesResponse> {
+  const res = await fetch("/api/news/sources/add", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await parseJson<NewsSourcesResponse & { detail?: string }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string" ? data.detail : "Не удалось добавить источник",
+    );
+  }
+  return data;
+}
+
+export async function ingestNews() {
+  const res = await fetch("/api/news/ingest", { method: "POST" });
+  const data = await parseJson<{
+    ok?: boolean;
+    added?: number;
+    sources?: { rss?: number; telegram?: number };
+    errors?: string[];
+    items?: { title?: string; source?: string; summary?: string }[];
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string" ? data.detail : "Не удалось обновить новости",
     );
   }
   return data;

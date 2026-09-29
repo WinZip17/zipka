@@ -26,6 +26,7 @@ from zipka.memory.user_profile import UserProfiler
 from zipka.mind.goals import PseudoMind
 from zipka.mind.proactive import ProactiveEngine
 from zipka.net.learner import NetLearner
+from zipka.news import NewsDesk
 from zipka.reset import (
     CONFIRM_PHRASE,
     is_reset_confirm,
@@ -107,6 +108,7 @@ class Zipka:
             self.llm, self.memory, self.mind, self.settings
         )
         self.net = NetLearner(self.llm, self.memory, self.settings)
+        self.news = NewsDesk(self.llm, self.memory, self.settings)
         self.safety = SafetyPolicy()
         self.vision = VisionGgufClient(self.settings)
         self.uploads_dir = self.settings.data_dir / "books" / "uploads"
@@ -142,6 +144,7 @@ class Zipka:
             self.llm, self.memory, self.mind, self.settings
         )
         self.net = NetLearner(self.llm, self.memory, self.settings)
+        self.news = NewsDesk(self.llm, self.memory, self.settings)
         self.safety = SafetyPolicy()
         self.vision = VisionGgufClient(self.settings)
         self.uploads_dir = self.settings.data_dir / "books" / "uploads"
@@ -194,6 +197,10 @@ class Zipka:
                     "active_checkpoint"
                 ),
             },
+            "news": {
+                "sources": self.news.load_sources(),
+                "items": len(self.news.load_items()),
+            },
             "mind": self.mind.load(),
             "proactive": self.proactive.rare_ping_status(),
             "limits": {
@@ -225,6 +232,7 @@ class Zipka:
             self.mind,
             self.proactive,
             self.net,
+            self.news,
             self.user,
         ):
             if hasattr(holder, "llm"):
@@ -426,6 +434,11 @@ class Zipka:
         if url_reply is not None:
             self._remember_turn(text, url_reply)
             return url_reply
+
+        news_reply = self.news.handle_chat_command(text)
+        if news_reply is not None:
+            self._remember_turn(text, news_reply)
+            return news_reply
 
         book_reply = self.try_read_from_message(text)
         if book_reply is not None:

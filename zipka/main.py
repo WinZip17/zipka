@@ -364,6 +364,43 @@ def learn(query: str = typer.Argument(..., help="URL или тема")) -> None:
     )
 
 
+@app.command("news")
+def news_cmd(
+    action: str = typer.Argument(
+        "sources",
+        help="sources|ingest|search",
+    ),
+    query: str = typer.Option("", "--query", "-q", help="Поиск"),
+    days: int = typer.Option(7, help="Период поиска"),
+    rss: str = typer.Option("", help="Добавить RSS URL"),
+    telegram: str = typer.Option("", "--tg", help="Добавить Telegram @channel"),
+) -> None:
+    """Новости: источники RSS/Telegram, ingest, поиск."""
+    z = _agent()
+    action = action.lower().strip()
+    if rss:
+        z.news.add_rss(rss)
+        console.print(f"RSS: {rss}")
+    if telegram:
+        z.news.add_telegram(telegram)
+        console.print(f"TG: @{telegram.lstrip('@')}")
+    if action == "sources":
+        console.print(Panel(str(z.news.load_sources()), title="news sources"))
+        return
+    if action == "ingest":
+        with console.status("Читаю новости..."):
+            result = z.news.ingest()
+        console.print(Panel(str(result), title="ingest"))
+        return
+    if action == "search":
+        if not query:
+            raise typer.BadParameter("Нужен --query")
+        hits = z.news.search(query, days=days)
+        console.print(Panel(str(hits), title=f"search «{query}» / {days}d"))
+        return
+    raise typer.BadParameter("sources|ingest|search")
+
+
 @app.command("finetune")
 def finetune_cmd(
     action: str = typer.Argument(

@@ -185,6 +185,148 @@ class FinetuneEvolve:
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
+    def _identity_examples(self) -> list[dict[str, str]]:
+        """Синтетические пары из persona / skills / preferences."""
+        from zipka.character.persona import Persona
+
+        examples: list[dict[str, str]] = []
+        try:
+            persona = Persona(self.settings).load()
+        except Exception:
+            persona = {}
+
+        skills = self.memory.get_skills()
+        prefs = self.memory.get_preferences() or {}
+
+        name = str(persona.get("name") or "Зипка")
+        name_en = str(persona.get("name_en") or "Zipka")
+        summary = str(persona.get("summary") or "").strip()
+        traits = [str(t) for t in (persona.get("traits") or []) if str(t).strip()]
+        style = [str(s) for s in (persona.get("style") or []) if str(s).strip()]
+        taboos = [str(t) for t in (persona.get("taboos") or []) if str(t).strip()]
+        goals = [str(g) for g in (persona.get("goals_seed") or []) if str(g).strip()]
+
+        if summary:
+            examples.append(
+                {
+                    "instruction": "Кто ты? Расскажи о себе коротко.",
+                    "input": "",
+                    "output": (
+                        f"Я — {name} ({name_en}). {summary}"
+                    )[:6000],
+                }
+            )
+        if traits:
+            examples.append(
+                {
+                    "instruction": "Какие у тебя черты характера?",
+                    "input": "",
+                    "output": (
+                        f"Мои черты: {', '.join(traits)}. "
+                        f"Я остаюсь собой — {name}, не сервильный ассистент."
+                    )[:6000],
+                }
+            )
+        if style:
+            style_body = "\n".join(f"- {s}" for s in style[:12])
+            examples.append(
+                {
+                    "instruction": "Как ты обычно отвечаешь? Какой у тебя стиль?",
+                    "input": "",
+                    "output": (
+                        f"Держусь такого стиля:\n{style_body}"
+                    )[:6000],
+                }
+            )
+        if taboos:
+            taboo_body = "\n".join(f"- {t}" for t in taboos[:10])
+            examples.append(
+                {
+                    "instruction": "Чего ты принципиально не делаешь?",
+                    "input": "",
+                    "output": (
+                        f"Табу для меня:\n{taboo_body}"
+                    )[:6000],
+                }
+            )
+        if goals:
+            examples.append(
+                {
+                    "instruction": "Какие у тебя цели?",
+                    "input": "",
+                    "output": (
+                        "Мои цели: " + "; ".join(goals[:10])
+                    )[:6000],
+                }
+            )
+
+        # закрепление женского рода
+        examples.append(
+            {
+                "instruction": "Ты рад меня видеть?",
+                "input": "",
+                "output": (
+                    f"Рада! Я — {name}, говорю о себе только в женском роде: "
+                    "рада, поняла, сделала, готова — не «рад/понял/сделал»."
+                ),
+            }
+        )
+
+        if skills:
+            skill_list = ", ".join(str(s) for s in skills if str(s).strip())
+            if skill_list:
+                examples.append(
+                    {
+                        "instruction": "Какие у тебя навыки?",
+                        "input": "",
+                        "output": (
+                            f"Мои навыки: {skill_list}. "
+                            "Могу развивать их через soft-evolve и практику."
+                        )[:6000],
+                    }
+                )
+                examples.append(
+                    {
+                        "instruction": "Что ты умеешь делать?",
+                        "input": "",
+                        "output": (
+                            f"Умею: {skill_list}. "
+                            "Если чего-то не хватает — учусь и запоминаю."
+                        )[:6000],
+                    }
+                )
+
+        if prefs:
+            pref_bits = [
+                f"{k}={v}" for k, v in prefs.items() if v is not None and str(v).strip()
+            ]
+            if pref_bits:
+                pref_line = ", ".join(pref_bits)
+                examples.append(
+                    {
+                        "instruction": "Какие у тебя предпочтения в общении?",
+                        "input": "",
+                        "output": (
+                            f"Мои предпочтения: {pref_line}. "
+                            "Стараюсь держать этот тон в ответах."
+                        )[:6000],
+                    }
+                )
+                # отдельный вопрос по тону, если есть
+                tone = prefs.get("tone") or prefs.get("language")
+                if tone:
+                    examples.append(
+                        {
+                            "instruction": "В каком тоне лучше со мной говорить?",
+                            "input": "",
+                            "output": (
+                                f"Ориентируюсь на предпочтения: {pref_line}."
+                            )[:6000],
+                        }
+                    )
+
+        return examples
+
     def build_dataset(
         self,
         *,
@@ -192,10 +334,10 @@ class FinetuneEvolve:
         max_pairs: int = 400,
         since_ts: str | None = None,
     ) -> dict[str, Any]:
-        """Собрать JSONL диалогов (alpaca-подобно: instruction/output)."""
+        """Собрать JSONL: чат + persona/skills/preferences."""
         hist = self.memory.chat_history(limit=5000)
         messages = hist.get("messages") or []
-        pairs: list[dict[str, str]] = []
+        chat_pairs: list[dict[str, str]] = []
         i = 0
         while i < len(messages) - 1:
             a, b = messages[i], messages[i + 1]
@@ -216,7 +358,7 @@ class FinetuneEvolve:
                 )
                 if user and bot and not any(m in user.lower() for m in skip_markers):
                     if len(user) >= 2 and len(bot) >= 8:
-                        pairs.append(
+                        chat_pairs.append(
                             {
                                 "instruction": user[:4000],
                                 "input": "",
@@ -227,8 +369,12 @@ class FinetuneEvolve:
                 continue
             i += 1
 
-        if len(pairs) > max_pairs:
-            pairs = pairs[-max_pairs:]
+        if len(chat_pairs) > max_pairs:
+            chat_pairs = chat_pairs[-max_pairs:]
+
+        identity = self._identity_examples()
+        # identity в начале — сильнее якорь личности, затем диалоги
+        pairs = [*identity, *chat_pairs]
 
         gen = int(self.load_lineage().get("generation") or 0) + 1
         ds_path = self.root / "datasets" / f"gen_{gen:04d}.jsonl"
@@ -239,8 +385,10 @@ class FinetuneEvolve:
         return {
             "path": str(ds_path),
             "pairs": len(pairs),
+            "chat_pairs": len(chat_pairs),
+            "identity_pairs": len(identity),
             "min_pairs": min_pairs,
-            "enough": len(pairs) >= min_pairs,
+            "enough": len(chat_pairs) >= min_pairs,
             "generation": gen,
         }
 
@@ -313,8 +461,10 @@ class FinetuneEvolve:
         ds = self.build_dataset(min_pairs=min_pairs)
         if not ds["enough"]:
             raise RuntimeError(
-                f"Мало диалогов для дообучения: {ds['pairs']} пар "
-                f"(нужно ≥ {min_pairs}). Поговори ещё, потом снова «дообучись»."
+                f"Мало диалогов для дообучения: {ds['chat_pairs']} пар чата "
+                f"(нужно ≥ {min_pairs}; persona/skills/prefs дают ещё "
+                f"{ds.get('identity_pairs', 0)} примеров). "
+                "Поговори ещё, потом снова «дообучись»."
             )
 
         base = self.resolve_train_base()
@@ -334,6 +484,8 @@ class FinetuneEvolve:
             "status": "pending_approval",
             "dataset": ds["path"],
             "pairs": ds["pairs"],
+            "chat_pairs": ds.get("chat_pairs"),
+            "identity_pairs": ds.get("identity_pairs"),
             "base": base,
             "params": {
                 "max_steps": max_steps,
@@ -371,7 +523,11 @@ class FinetuneEvolve:
             [
                 f"Дообучение {pending['id']} ждёт approve (сохранение опыта в GGUF).",
                 f"Поколение: {pending.get('generation')}",
-                f"Пар диалогов: {pending.get('pairs')}",
+                (
+                    f"Примеров: {pending.get('pairs')} "
+                    f"(чат {pending.get('chat_pairs', '?')} + "
+                    f"persona/skills/prefs {pending.get('identity_pairs', '?')})"
+                ),
                 f"База: {base.get('kind')} → {base_desc}",
                 f"Выход: data/models/{pending.get('export_gguf_name')}",
                 f"Параметры: {json.dumps(pending.get('params') or {}, ensure_ascii=False)}",

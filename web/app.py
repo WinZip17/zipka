@@ -333,6 +333,62 @@ def api_finetune_start() -> dict:
         raise HTTPException(400, str(exc)) from exc
 
 
+class NewsSourcesIn(BaseModel):
+    rss: list[str] | None = None
+    telegram: list[str] | None = None
+
+
+class NewsAddIn(BaseModel):
+    rss: str | None = None
+    telegram: str | None = None
+
+
+@app.get("/api/news/sources")
+def api_news_sources() -> dict:
+    return {
+        "sources": agent.news.load_sources(),
+        "items": len(agent.news.load_items()),
+    }
+
+
+@app.put("/api/news/sources")
+def api_news_sources_put(body: NewsSourcesIn) -> dict:
+    current = agent.news.load_sources()
+    if body.rss is not None:
+        current["rss"] = body.rss
+    if body.telegram is not None:
+        current["telegram"] = body.telegram
+    return {"sources": agent.news.save_sources(current)}
+
+
+@app.post("/api/news/sources/add")
+def api_news_sources_add(body: NewsAddIn) -> dict:
+    try:
+        if body.rss:
+            sources = agent.news.add_rss(body.rss)
+        elif body.telegram:
+            sources = agent.news.add_telegram(body.telegram)
+        else:
+            raise HTTPException(400, "Укажи rss или telegram")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"sources": sources}
+
+
+@app.post("/api/news/ingest")
+def api_news_ingest() -> dict:
+    try:
+        return agent.news.ingest()
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/news/search")
+def api_news_search(q: str = "", days: int = 7) -> dict:
+    hits = agent.news.search(q, days=max(1, min(days, 90)), limit=30)
+    return {"query": q, "days": days, "hits": hits, "count": len(hits)}
+
+
 @app.post("/api/reflect")
 def api_reflect() -> dict:
     return agent.mind.reflect()

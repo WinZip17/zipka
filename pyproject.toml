@@ -1,7 +1,7 @@
 [project]
 name = "zipka"
 version = "0.1.0"
-description = "Зипка — локальный саморазвивающийся агент на Ollama"
+description = "Зипка — локальный саморазвивающийся агент"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

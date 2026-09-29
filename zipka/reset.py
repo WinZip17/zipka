@@ -23,6 +23,7 @@ WIPE_SUBDIRS = (
     "books/notes",
     "books/extracted",
     "books/uploads",
+    "news",
 )
 WIPE_FILES = (
     "persona/persona.yaml",

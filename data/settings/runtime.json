@@ -1,9 +1,9 @@
 {
   "compute_mode": "gpu",
   "gpu_layers": 12,
-  "chat_gguf": "Qwen3-8B-Q4_K_M.gguf",
-  "code_gguf": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
+  "chat_gguf": "Qwen3-8B-heretic-Q5_K_M.gguf",
+  "code_gguf": "Qwen3-8B-heretic-Q5_K_M.gguf",
   "vision_gguf": "moondream2-text-model-f16_ct-vicuna.gguf",
   "vision_mmproj": "moondream2-mmproj-f16-20250414.gguf",
-  "chat_model_id": "Qwen3-8B-Q4_K_M.gguf"
+  "chat_model_id": "Qwen3-8B-heretic-Q5_K_M.gguf"
 }

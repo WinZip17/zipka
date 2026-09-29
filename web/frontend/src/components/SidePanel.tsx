@@ -4,6 +4,9 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import SettingsIcon from "@mui/icons-material/Settings";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import Alert from "@mui/material/Alert";
+import Accordion from "@mui/material/Accordion";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import AccordionSummary from "@mui/material/AccordionSummary";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
@@ -12,6 +15,7 @@ import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import Divider from "@mui/material/Divider";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import FormControl from "@mui/material/FormControl";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import IconButton from "@mui/material/IconButton";
@@ -20,6 +24,8 @@ import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Slider from "@mui/material/Slider";
 import Stack from "@mui/material/Stack";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
@@ -27,14 +33,18 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import {
   FILE_ACCEPT,
+  addNewsSource,
   approvePatch,
   earsAction,
   eyesAction,
   fetchFinetuneStatus,
+  fetchNewsSources,
+  ingestNews,
   learn,
   proposeFinetune,
   resetInfo,
   resetLearning,
+  saveNewsSources,
   sendChat,
   setCompute,
   setModels,
@@ -143,6 +153,7 @@ export function SidePanel({
 }: Props) {
   const sideFileRef = useRef<HTMLInputElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
   const [path, setPath] = useState("");
   const [comment, setComment] = useState("");
@@ -162,6 +173,13 @@ export function SidePanel({
   const [finetuneInfo, setFinetuneInfo] = useState<FinetuneStatusResponse | null>(
     null,
   );
+  const [newsRss, setNewsRss] = useState("");
+  const [newsTg, setNewsTg] = useState("");
+  const [newsRssList, setNewsRssList] = useState<string[]>([]);
+  const [newsTgList, setNewsTgList] = useState<string[]>([]);
+  const [newsItems, setNewsItems] = useState(0);
+  const [newsBusy, setNewsBusy] = useState(false);
+  const [newsMsg, setNewsMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const c = status?.compute;
@@ -196,9 +214,23 @@ export function SidePanel({
     }
   };
 
+  const refreshNews = async () => {
+    try {
+      const data = await fetchNewsSources();
+      setNewsRssList(data.sources?.rss || []);
+      setNewsTgList(data.sources?.telegram || []);
+      setNewsItems(data.items || 0);
+      return data;
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (!settingsOpen) return;
     void refreshFinetune();
+    void refreshNews();
   }, [settingsOpen]);
 
   useEffect(() => {
@@ -249,6 +281,95 @@ export function SidePanel({
       setFinetuneMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setFinetuneBusy(false);
+    }
+  };
+
+  const onAddRss = async () => {
+    const url = newsRss.trim();
+    if (!url) return;
+    setNewsBusy(true);
+    setNewsMsg(null);
+    try {
+      await addNewsSource({ rss: url });
+      setNewsRss("");
+      await refreshNews();
+      onRefresh();
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+    }
+  };
+
+  const onAddTg = async () => {
+    const ch = newsTg.trim();
+    if (!ch) return;
+    setNewsBusy(true);
+    setNewsMsg(null);
+    try {
+      await addNewsSource({ telegram: ch });
+      setNewsTg("");
+      await refreshNews();
+      onRefresh();
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+    }
+  };
+
+  const onRemoveRss = async (url: string) => {
+    setNewsBusy(true);
+    setNewsMsg(null);
+    try {
+      const next = newsRssList.filter((u) => u !== url);
+      await saveNewsSources({ rss: next, telegram: newsTgList });
+      await refreshNews();
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+    }
+  };
+
+  const onRemoveTg = async (ch: string) => {
+    setNewsBusy(true);
+    setNewsMsg(null);
+    try {
+      const next = newsTgList.filter((c) => c !== ch);
+      await saveNewsSources({ rss: newsRssList, telegram: next });
+      await refreshNews();
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+    }
+  };
+
+  const onIngestNews = async () => {
+    setNewsBusy(true);
+    setNewsMsg(null);
+    onThinking("Читаю новости…");
+    try {
+      const data = await ingestNews();
+      const errs = data.errors?.length
+        ? `\nОшибки: ${data.errors.slice(0, 3).join("; ")}`
+        : "";
+      setNewsMsg(`+${data.added ?? 0} выдержек${errs}`);
+      await refreshNews();
+      onRefresh();
+      onBubble(
+        `Обновила новости: +${data.added ?? 0} выдержек.` +
+          (data.items?.[0]
+            ? `\nПример: ${data.items[0].source}: ${data.items[0].title}`
+            : ""),
+        "bot",
+      );
+    } catch (err) {
+      setNewsMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNewsBusy(false);
+      onThinking(null);
     }
   };
 
@@ -975,289 +1096,532 @@ export function SidePanel({
         onClose={() => setSettingsOpen(false)}
         fullWidth
         maxWidth="sm"
-        slotProps={{ paper: { sx: dialogPaperSx } }}
+        slotProps={{
+          paper: {
+            sx: {
+              ...dialogPaperSx,
+              maxHeight: "min(88vh, 760px)",
+              display: "flex",
+              flexDirection: "column",
+            },
+          },
+        }}
       >
-        <DialogTitle sx={{ fontFamily: '"Manrope", sans-serif', fontWeight: 700 }}>
+        <DialogTitle
+          sx={{
+            fontFamily: '"Manrope", sans-serif',
+            fontWeight: 700,
+            pb: 0.5,
+          }}
+        >
           Настройки
         </DialogTitle>
-        <DialogContent>
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
-            Модели GGUF
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
-            По умолчанию: чат — Pathfinder, кодинг — Qwen2.5. Можно выбрать любую из{" "}
-            <code>data/models</code> для каждой роли или одну и ту же на обе.
-          </Typography>
-          <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
-            <InputLabel id="chat-gguf-label">Модель чата</InputLabel>
-            <Select
-              labelId="chat-gguf-label"
-              label="Модель чата"
-              value={chatGguf}
-              onChange={(e) => setChatGguf(String(e.target.value))}
-            >
-              {(
-                status?.chat_models?.files ||
-                (status?.chat_models?.profiles || []).map((p) => ({
-                  filename: p.filename || p.id,
-                  label: p.label,
-                  blurb: p.blurb,
-                }))
-              ).map((f) => (
-                <MenuItem key={`chat-${f.filename}`} value={f.filename}>
-                  {f.label || f.filename}
-                  {f.blurb ? ` — ${f.blurb}` : ""}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
-            <InputLabel id="code-gguf-label">Модель кодинга</InputLabel>
-            <Select
-              labelId="code-gguf-label"
-              label="Модель кодинга"
-              value={codeGguf}
-              onChange={(e) => setCodeGguf(String(e.target.value))}
-            >
-              {(
-                status?.chat_models?.files ||
-                (status?.chat_models?.profiles || []).map((p) => ({
-                  filename: p.filename || p.id,
-                  label: p.label,
-                  blurb: p.blurb,
-                }))
-              ).map((f) => (
-                <MenuItem key={`code-${f.filename}`} value={f.filename}>
-                  {f.label || f.filename}
-                  {f.blurb ? ` — ${f.blurb}` : ""}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          {chatGguf && codeGguf && chatGguf === codeGguf ? (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", mb: 1 }}
-            >
-              Одна модель на чат и кодинг — второй экземпляр в VRAM не грузится.
-            </Typography>
-          ) : null}
-          {modelsMsg && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
-            >
-              {modelsMsg}
-            </Typography>
-          )}
-          <Button
-            fullWidth
-            variant="contained"
-            disabled={busy || modelsBusy || !chatGguf || !codeGguf}
-            onClick={() => void applyModels()}
-            sx={{ mb: 2.5 }}
-          >
-            {modelsBusy ? "Гружу модели…" : "Применить модели"}
-          </Button>
-
-          <Divider sx={{ mb: 2 }} />
-
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
-            Модель: CPU / GPU
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
-            Hybrid делит слои: часть на видеокарте, остальное на процессоре. Pathfinder ≈40
-            слоёв — при 24 на GPU CPU почти не видно в диспетчере (GPU делает ~60%). Для
-            заметной нагрузки на CPU поставь 8–16. Режим GPU = все слои на карте.
-          </Typography>
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            size="small"
-            value={computeMode}
-            onChange={(_e, v) => {
-              if (v) setComputeMode(v);
-            }}
-            sx={{ mb: 1.5 }}
-          >
-            <ToggleButton value="cpu">CPU</ToggleButton>
-            <ToggleButton value="gpu">GPU</ToggleButton>
-            <ToggleButton value="hybrid">Hybrid</ToggleButton>
-          </ToggleButtonGroup>
-          {computeMode === "hybrid" && (
-            <Box sx={{ px: 0.5, mb: 1.5 }}>
-              <Typography variant="caption" color="text.secondary">
-                Слоёв на GPU: {gpuLayers}
-                {status?.compute?.load?.n_layer
-                  ? ` / ${status.compute.load.n_layer} у модели`
-                  : " (Pathfinder ≈40)"}
-                {" · "}меньше число = больше CPU
+        <Tabs
+          value={settingsTab}
+          onChange={(_e, v: number) => setSettingsTab(v)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{
+            px: 1,
+            minHeight: 40,
+            borderBottom: 1,
+            borderColor: "divider",
+            "& .MuiTab-root": {
+              minHeight: 40,
+              textTransform: "none",
+              fontWeight: 600,
+              fontSize: "0.85rem",
+            },
+          }}
+        >
+          <Tab label="Модели" />
+          <Tab label="Новости" />
+          <Tab label="Дообучение" />
+          <Tab label="Данные" />
+        </Tabs>
+        <DialogContent
+          sx={{
+            pt: 2,
+            flex: 1,
+            overflow: "auto",
+            minHeight: 280,
+          }}
+        >
+          {settingsTab === 0 && (
+            <Box>
+              <Typography
+                variant="subtitle2"
+                color="text.secondary"
+                sx={{ mb: 1, fontWeight: 700 }}
+              >
+                GGUF
               </Typography>
-              <Slider
+              <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
+                <InputLabel id="chat-gguf-label">Чат</InputLabel>
+                <Select
+                  labelId="chat-gguf-label"
+                  label="Чат"
+                  value={chatGguf}
+                  onChange={(e) => setChatGguf(String(e.target.value))}
+                >
+                  {(
+                    status?.chat_models?.files ||
+                    (status?.chat_models?.profiles || []).map((p) => ({
+                      filename: p.filename || p.id,
+                      label: p.label,
+                      blurb: p.blurb,
+                    }))
+                  ).map((f) => (
+                    <MenuItem key={`chat-${f.filename}`} value={f.filename}>
+                      {f.label || f.filename}
+                      {f.blurb ? ` — ${f.blurb}` : ""}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
+                <InputLabel id="code-gguf-label">Кодинг</InputLabel>
+                <Select
+                  labelId="code-gguf-label"
+                  label="Кодинг"
+                  value={codeGguf}
+                  onChange={(e) => setCodeGguf(String(e.target.value))}
+                >
+                  {(
+                    status?.chat_models?.files ||
+                    (status?.chat_models?.profiles || []).map((p) => ({
+                      filename: p.filename || p.id,
+                      label: p.label,
+                      blurb: p.blurb,
+                    }))
+                  ).map((f) => (
+                    <MenuItem key={`code-${f.filename}`} value={f.filename}>
+                      {f.label || f.filename}
+                      {f.blurb ? ` — ${f.blurb}` : ""}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {chatGguf && codeGguf && chatGguf === codeGguf ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", mb: 1 }}
+                >
+                  Одна модель на обе роли — второй экземпляр в VRAM не грузится.
+                </Typography>
+              ) : null}
+              {modelsMsg && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+                >
+                  {modelsMsg}
+                </Typography>
+              )}
+              <Button
+                fullWidth
+                variant="contained"
+                disabled={busy || modelsBusy || !chatGguf || !codeGguf}
+                onClick={() => void applyModels()}
+                sx={{ mb: 2 }}
+              >
+                {modelsBusy ? "Гружу модели…" : "Применить модели"}
+              </Button>
+
+              <Typography
+                variant="subtitle2"
+                color="text.secondary"
+                sx={{ mb: 1, fontWeight: 700 }}
+              >
+                Compute
+              </Typography>
+              <ToggleButtonGroup
+                exclusive
+                fullWidth
                 size="small"
-                min={1}
-                max={Math.max(40, Number(status?.compute?.load?.n_layer) || 40)}
-                value={gpuLayers}
-                onChange={(_e, v) => setGpuLayers(Array.isArray(v) ? v[0] : v)}
-                valueLabelDisplay="auto"
-              />
+                value={computeMode}
+                onChange={(_e, v) => {
+                  if (v) setComputeMode(v);
+                }}
+                sx={{ mb: 1.25 }}
+              >
+                <ToggleButton value="cpu">CPU</ToggleButton>
+                <ToggleButton value="gpu">GPU</ToggleButton>
+                <ToggleButton value="hybrid">Hybrid</ToggleButton>
+              </ToggleButtonGroup>
+              {computeMode === "hybrid" && (
+                <Box sx={{ px: 0.5, mb: 1.25 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    Слоёв на GPU: {gpuLayers}
+                    {status?.compute?.load?.n_layer
+                      ? ` / ${status.compute.load.n_layer}`
+                      : ""}
+                  </Typography>
+                  <Slider
+                    size="small"
+                    min={1}
+                    max={Math.max(40, Number(status?.compute?.load?.n_layer) || 40)}
+                    value={gpuLayers}
+                    onChange={(_e, v) => setGpuLayers(Array.isArray(v) ? v[0] : v)}
+                    valueLabelDisplay="auto"
+                  />
+                </Box>
+              )}
+              {status?.compute?.note && (
+                <Alert
+                  severity={status.compute.llama_gpu_offload ? "success" : "info"}
+                  sx={{ mb: 1.25 }}
+                >
+                  {status.compute.note}
+                </Alert>
+              )}
+              {status?.compute?.load?.n_cpu_layers != null && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", mb: 1 }}
+                >
+                  Загружено: GPU{" "}
+                  {status.compute.load.n_gpu_layers_effective ?? "—"} / CPU{" "}
+                  {status.compute.load.n_cpu_layers}
+                  {status.compute.load.n_threads
+                    ? ` · потоков: ${status.compute.load.n_threads}`
+                    : ""}
+                </Typography>
+              )}
+              {computeMsg && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+                >
+                  {computeMsg}
+                </Typography>
+              )}
+              <Button
+                fullWidth
+                variant="contained"
+                disabled={busy || computeBusy}
+                onClick={() => void applyCompute()}
+                sx={{ mb: 1 }}
+              >
+                {computeBusy ? "Применяю…" : "Применить compute"}
+              </Button>
+              <Accordion
+                disableGutters
+                elevation={0}
+                sx={{
+                  bgcolor: "transparent",
+                  "&:before": { display: "none" },
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: 1,
+                }}
+              >
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="caption" color="text.secondary">
+                    Подсказка по Hybrid / GGUF
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ pt: 0 }}>
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    Hybrid делит слои между GPU и CPU. Меньше слоёв на GPU → больше
+                    нагрузка на процессор. Файлы моделей: <code>data/models</code>.
+                  </Typography>
+                </AccordionDetails>
+              </Accordion>
             </Box>
           )}
-          {status?.compute?.note && (
-            <Alert severity={status.compute.llama_gpu_offload ? "success" : "info"} sx={{ mb: 1.5 }}>
-              {status.compute.note}
-            </Alert>
-          )}
-          {status?.compute?.load?.n_cpu_layers != null && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-              Сейчас загружено: GPU{" "}
-              {status.compute.load.n_gpu_layers_effective ?? "—"} / CPU{" "}
-              {status.compute.load.n_cpu_layers}
-              {status.compute.load.n_threads
-                ? ` · потоков CPU: ${status.compute.load.n_threads}`
-                : ""}
-            </Typography>
-          )}
-          {computeMsg && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
-            >
-              {computeMsg}
-            </Typography>
-          )}
-          <Button
-            fullWidth
-            variant="contained"
-            disabled={busy || computeBusy}
-            onClick={() => void applyCompute()}
-            sx={{ mb: 2.5 }}
-          >
-            {computeBusy ? "Применяю…" : "Применить compute"}
-          </Button>
 
-          <Divider sx={{ mb: 2 }} />
-
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
-            Дообучение (LoRA → GGUF)
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
-            Вшить диалоги в веса и получить новый{" "}
-            <code>zipka-self-gen…gguf</code>. Лучше чат на Qwen2.5/Qwen3. Нужно:{" "}
-            <code>pip install -e &quot;.[finetune]&quot;</code>. Экспорт GGUF — через llama.cpp.
-          </Typography>
-          <Stack spacing={0.35} sx={{ mb: 1.25 }}>
-            <InfoLine
-              label="Поколение"
-              value={
-                finetuneInfo?.lineage?.generation ??
-                status?.finetune_lineage?.generation ??
-                "—"
-              }
-            />
-            <InfoLine
-              label="Статус"
-              value={
-                [
-                  finetuneInfo?.status?.state || status?.finetune?.state || "idle",
-                  finetuneInfo?.status?.phase
-                    ? `· ${finetuneInfo.status.phase}`
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(" ")
-              }
-            />
-            <InfoLine
-              label="Активный GGUF"
-              value={
-                finetuneInfo?.lineage?.active_gguf ||
-                status?.finetune_lineage?.active_gguf ||
-                "—"
-              }
-            />
-            {finetuneInfo?.pending ? (
-              <InfoLine
-                label="Заявка"
-                value={`gen ${finetuneInfo.pending.generation ?? "?"} · ${finetuneInfo.pending.pairs ?? "?"} пар → ${finetuneInfo.pending.export_gguf_name || "gguf"}`}
-              />
-            ) : null}
-            {finetuneInfo?.status?.error ? (
-              <Typography variant="caption" color="error" sx={{ display: "block" }}>
-                {String(finetuneInfo.status.error)}
+          {settingsTab === 1 && (
+            <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
+                Выдержек: {newsItems || status?.news?.items || 0}. В чате можно спросить:
+                «были упоминания про Озон за неделю?»
               </Typography>
-            ) : null}
-          </Stack>
-          {finetuneMsg && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
-            >
-              {finetuneMsg}
-            </Typography>
+              <Stack spacing={1} sx={{ mb: 1.25 }}>
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    size="small"
+                    fullWidth
+                    label="RSS URL"
+                    placeholder="https://…/rss"
+                    value={newsRss}
+                    onChange={(e) => setNewsRss(e.target.value)}
+                  />
+                  <Button
+                    variant="outlined"
+                    disabled={busy || newsBusy || !newsRss.trim()}
+                    onClick={() => void onAddRss()}
+                    sx={{ whiteSpace: "nowrap" }}
+                  >
+                    + RSS
+                  </Button>
+                </Stack>
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    size="small"
+                    fullWidth
+                    label="Telegram"
+                    placeholder="@channel"
+                    value={newsTg}
+                    onChange={(e) => setNewsTg(e.target.value)}
+                  />
+                  <Button
+                    variant="outlined"
+                    disabled={busy || newsBusy || !newsTg.trim()}
+                    onClick={() => void onAddTg()}
+                    sx={{ whiteSpace: "nowrap" }}
+                  >
+                    + TG
+                  </Button>
+                </Stack>
+              </Stack>
+              {(newsRssList.length > 0 || newsTgList.length > 0) && (
+                <Box
+                  sx={{
+                    mb: 1.25,
+                    maxHeight: 160,
+                    overflow: "auto",
+                    border: 1,
+                    borderColor: "divider",
+                    borderRadius: 1,
+                    px: 1,
+                    py: 0.5,
+                  }}
+                >
+                  {newsRssList.map((u) => (
+                    <Stack
+                      key={`rss-${u}`}
+                      direction="row"
+                      spacing={1}
+                      sx={{ alignItems: "center", mb: 0.35 }}
+                    >
+                      <Typography
+                        variant="caption"
+                        sx={{ flex: 1, wordBreak: "break-all" }}
+                      >
+                        RSS: {u}
+                      </Typography>
+                      <Button
+                        size="small"
+                        color="inherit"
+                        disabled={newsBusy}
+                        onClick={() => void onRemoveRss(u)}
+                      >
+                        ×
+                      </Button>
+                    </Stack>
+                  ))}
+                  {newsTgList.map((c) => (
+                    <Stack
+                      key={`tg-${c}`}
+                      direction="row"
+                      spacing={1}
+                      sx={{ alignItems: "center", mb: 0.35 }}
+                    >
+                      <Typography variant="caption" sx={{ flex: 1 }}>
+                        TG: @{c}
+                      </Typography>
+                      <Button
+                        size="small"
+                        color="inherit"
+                        disabled={newsBusy}
+                        onClick={() => void onRemoveTg(c)}
+                      >
+                        ×
+                      </Button>
+                    </Stack>
+                  ))}
+                </Box>
+              )}
+              {newsMsg && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+                >
+                  {newsMsg}
+                </Typography>
+              )}
+              <Button
+                fullWidth
+                variant="contained"
+                disabled={
+                  busy ||
+                  newsBusy ||
+                  (newsRssList.length === 0 && newsTgList.length === 0)
+                }
+                onClick={() => void onIngestNews()}
+                sx={{ mb: 1 }}
+              >
+                {newsBusy ? "Читаю ленту…" : "Обновить ленту"}
+              </Button>
+              <Accordion
+                disableGutters
+                elevation={0}
+                sx={{
+                  bgcolor: "transparent",
+                  "&:before": { display: "none" },
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: 1,
+                }}
+              >
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="caption" color="text.secondary">
+                    Как это работает
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ pt: 0 }}>
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    Источники → обновление ленты → выдержки с ссылкой на первоисточник.
+                    Telegram только публичные каналы (<code>t.me/s/…</code>).
+                  </Typography>
+                </AccordionDetails>
+              </Accordion>
+            </Box>
           )}
-          <Stack spacing={1} sx={{ mb: 2.5 }}>
-            <Button
-              fullWidth
-              variant="outlined"
-              disabled={busy || finetuneBusy}
-              onClick={() => void refreshFinetune().then(() => onRefresh())}
-            >
-              Обновить статус
-            </Button>
-            <Button
-              fullWidth
-              variant="contained"
-              disabled={
-                busy ||
-                finetuneBusy ||
-                finetuneInfo?.status?.state === "running"
-              }
-              onClick={() => void onProposeFinetune()}
-            >
-              {finetuneBusy ? "Готовлю…" : "Подготовить дообучение"}
-            </Button>
-            <Button
-              fullWidth
-              variant="contained"
-              color="secondary"
-              disabled={
-                busy ||
-                finetuneBusy ||
-                !finetuneInfo?.pending ||
-                finetuneInfo?.status?.state === "running"
-              }
-              onClick={() => void onStartFinetune()}
-            >
-              {finetuneInfo?.approve_phrase ||
-                status?.finetune_approve_phrase ||
-                "Разрешаю дообучение"}
-            </Button>
-          </Stack>
 
-          <Divider sx={{ mb: 2 }} />
+          {settingsTab === 2 && (
+            <Box>
+              <Stack spacing={0.35} sx={{ mb: 1.25 }}>
+                <InfoLine
+                  label="Поколение"
+                  value={
+                    finetuneInfo?.lineage?.generation ??
+                    status?.finetune_lineage?.generation ??
+                    "—"
+                  }
+                />
+                <InfoLine
+                  label="Статус"
+                  value={
+                    [
+                      finetuneInfo?.status?.state || status?.finetune?.state || "idle",
+                      finetuneInfo?.status?.phase
+                        ? `· ${finetuneInfo.status.phase}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
+                  }
+                />
+                <InfoLine
+                  label="GGUF"
+                  value={
+                    finetuneInfo?.lineage?.active_gguf ||
+                    status?.finetune_lineage?.active_gguf ||
+                    "—"
+                  }
+                />
+                {finetuneInfo?.pending ? (
+                  <InfoLine
+                    label="Заявка"
+                    value={`gen ${finetuneInfo.pending.generation ?? "?"} · чат ${finetuneInfo.pending.chat_pairs ?? "?"} + id ${finetuneInfo.pending.identity_pairs ?? "?"}`}
+                  />
+                ) : null}
+                {finetuneInfo?.status?.error ? (
+                  <Typography variant="caption" color="error" sx={{ display: "block" }}>
+                    {String(finetuneInfo.status.error)}
+                  </Typography>
+                ) : null}
+              </Stack>
+              {finetuneMsg && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+                >
+                  {finetuneMsg}
+                </Typography>
+              )}
+              <Stack spacing={1} sx={{ mb: 1 }}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  disabled={busy || finetuneBusy}
+                  onClick={() => void refreshFinetune().then(() => onRefresh())}
+                >
+                  Обновить статус
+                </Button>
+                <Button
+                  fullWidth
+                  variant="contained"
+                  disabled={
+                    busy ||
+                    finetuneBusy ||
+                    finetuneInfo?.status?.state === "running"
+                  }
+                  onClick={() => void onProposeFinetune()}
+                >
+                  {finetuneBusy ? "Готовлю…" : "Подготовить"}
+                </Button>
+                <Button
+                  fullWidth
+                  variant="contained"
+                  color="secondary"
+                  disabled={
+                    busy ||
+                    finetuneBusy ||
+                    !finetuneInfo?.pending ||
+                    finetuneInfo?.status?.state === "running"
+                  }
+                  onClick={() => void onStartFinetune()}
+                >
+                  {finetuneInfo?.approve_phrase ||
+                    status?.finetune_approve_phrase ||
+                    "Разрешаю дообучение"}
+                </Button>
+              </Stack>
+              <Accordion
+                disableGutters
+                elevation={0}
+                sx={{
+                  bgcolor: "transparent",
+                  "&:before": { display: "none" },
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: 1,
+                }}
+              >
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="caption" color="text.secondary">
+                    Требования
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ pt: 0 }}>
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    Чат + persona/skills/preferences → LoRA → новый{" "}
+                    <code>zipka-self-gen…gguf</code>. Нужно{" "}
+                    <code>pip install -e &quot;.[finetune]&quot;</code>, лучше Qwen2.5/Qwen3.
+                    Экспорт GGUF — через llama.cpp.
+                  </Typography>
+                </AccordionDetails>
+              </Accordion>
+            </Box>
+          )}
 
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
-            Данные
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Полный сброс чата, заметок, целей, книг, снимков, патчей и persona.yaml. Действие
-            необратимо.
-          </Typography>
-          <Button
-            fullWidth
-            color="error"
-            variant="contained"
-            disabled={busy}
-            onClick={() => void onReset()}
-            sx={{ bgcolor: "#5a1f1f", "&:hover": { bgcolor: "#6e2828" } }}
-          >
-            Сброс обучения
-          </Button>
+          {settingsTab === 3 && (
+            <Box>
+              <Alert severity="warning" sx={{ mb: 1.5 }}>
+                Полный сброс чата, заметок, целей, книг, новостей, патчей и persona.yaml.
+                Действие необратимо.
+              </Alert>
+              <Button
+                fullWidth
+                color="error"
+                variant="contained"
+                disabled={busy}
+                onClick={() => void onReset()}
+                sx={{ bgcolor: "#5a1f1f", "&:hover": { bgcolor: "#6e2828" } }}
+              >
+                Сброс обучения
+              </Button>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setSettingsOpen(false)} sx={{ color: "text.secondary" }}>
