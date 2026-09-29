@@ -23,6 +23,18 @@ dependencies = [
   "lxml>=5.2.0",
 ]
 
+[project.optional-dependencies]
+finetune = [
+  "torch>=2.2.0",
+  "transformers>=4.42.0",
+  "peft>=0.11.0",
+  "datasets>=2.19.0",
+  "accelerate>=0.30.0",
+  "sentencepiece>=0.2.0",
+  "protobuf>=4.25.0",
+  "safetensors>=0.4.0",
+]
+
 [project.scripts]
 zipka = "zipka.main:main"
 

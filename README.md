@@ -13,6 +13,7 @@
 7. Профиль собеседника (имя, настроение, «свои», speaker-guard)
 8. CLI + web UI (React + MUI)
 9. Две роли GGUF: **чат** и **кодинг** (можно одна модель на обе)
+10. Дообучение на своих диалогах (LoRA → новый GGUF) — альтернатива «сохранись»
 
 ## Быстрый старт
 
@@ -153,7 +154,32 @@ DJVU: читается через встроенный пакет **`djvu-rs`** 
 | `python -m zipka.main reset-learning` | Сброс всего обучения (с подтверждением) |
 | `python -m zipka.main learn URL\|тема` | Сеть |
 | `python -m zipka.main rollback ID` | Откат патча |
+| `python -m zipka.main finetune status\|propose\|start\|lineage` | LoRA → новый GGUF |
 | `python -m zipka.main web` | Web UI |
+
+## Дообучение (сохранение опыта в GGUF)
+
+Альтернатива soft-памяти: мелкими шагами вшить диалоги в веса и получить новый `.gguf`.
+
+```bash
+pip install -e ".[finetune]"
+# для экспорта GGUF: llama.cpp convert_hf_to_gguf.py + llama-quantize
+# set ZIPKA_LLAMA_CONVERT=C:\path\to\llama.cpp\convert_hf_to_gguf.py
+# set ZIPKA_LLAMA_QUANTIZE=C:\path\to\llama-quantize.exe
+```
+
+В чате: `дообучись` / `сохранись` → проверка → `разрешаю дообучение`.
+
+Цикл:
+1. Диалоги из `data/memory/chat.jsonl` → датасет
+2. LoRA на HF-базе (Qwen2.5/Qwen3) или на прошлом `data/finetune/checkpoints/gen_N`
+3. Merge → checkpoint gen_N+1
+4. Экспорт → `data/models/zipka-self-genNNNN.*.gguf`, переключение chat GGUF
+5. Следующий круг стартует с этого checkpoint
+
+**Важно:** Pathfinder сейчас только как GGUF — для первого круга поставь чат на **Qwen2.5-7B** (8GB VRAM ок с 4-bit, если есть bitsandbytes) или укажи `override_hf_base` в `data/finetune/lineage.json`. На Windows без bnb обучение тяжелее.
+
+CLI: `python -m zipka.main finetune propose` → `… start` → `… status`.
 
 ## Проактивность
 

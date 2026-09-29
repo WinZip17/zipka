@@ -150,6 +150,23 @@ export type StatusResponse = {
   compute?: ComputeSettings;
   chat_models?: ChatModelsStatus;
   model_roles?: ChatModelsStatus;
+  pending_finetune?: boolean;
+  finetune_approve_phrase?: string;
+  finetune?: {
+    state?: string;
+    job_id?: string;
+    generation?: number;
+    phase?: string;
+    error?: string;
+    log?: string;
+    result?: Record<string, unknown>;
+    updated_at?: string;
+  };
+  finetune_lineage?: {
+    generation?: number;
+    active_gguf?: string;
+    active_checkpoint?: string;
+  };
   proactive?: {
     today?: string;
     used?: number;
@@ -375,6 +392,73 @@ export async function setModels(opts: {
     const detail = data.detail;
     throw new Error(
       typeof detail === "string" ? detail : "Не удалось сменить модели",
+    );
+  }
+  return data;
+}
+
+export type FinetuneStatusResponse = {
+  status?: {
+    state?: string;
+    job_id?: string;
+    generation?: number;
+    phase?: string;
+    error?: string;
+    log?: string;
+    result?: Record<string, unknown>;
+    updated_at?: string;
+  };
+  pending?: {
+    id?: string;
+    generation?: number;
+    pairs?: number;
+    export_gguf_name?: string;
+    base?: { kind?: string; hf_id?: string; path?: string };
+    params?: Record<string, unknown>;
+  } | null;
+  lineage?: {
+    generation?: number;
+    active_gguf?: string;
+    active_checkpoint?: string;
+    history?: unknown[];
+  };
+  approve_phrase?: string;
+};
+
+export async function fetchFinetuneStatus(): Promise<FinetuneStatusResponse> {
+  const res = await fetch("/api/finetune/status");
+  return parseJson(res);
+}
+
+export async function proposeFinetune() {
+  const res = await fetch("/api/finetune/propose", { method: "POST" });
+  const data = await parseJson<{
+    pending?: FinetuneStatusResponse["pending"];
+    message?: string;
+    approve_phrase?: string;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string" ? data.detail : "Не удалось подготовить дообучение",
+    );
+  }
+  return data;
+}
+
+export async function startFinetune() {
+  const res = await fetch("/api/finetune/start", { method: "POST" });
+  const data = await parseJson<{
+    ok?: boolean;
+    job_id?: string;
+    pid?: number;
+    log?: string;
+    message?: string;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string" ? data.detail : "Не удалось запустить дообучение",
     );
   }
   return data;

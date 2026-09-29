@@ -12,6 +12,8 @@ from zipka.books.reader import (
 )
 from zipka.character.persona import Persona
 from zipka.config import Settings, ensure_data_dirs, get_settings
+from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
+from zipka.evolve.finetune import FinetuneEvolve
 from zipka.evolve.hard import APPROVE_PHRASE, HardEvolve
 from zipka.evolve.soft import SoftEvolve
 from zipka.llm.base import LlmError
@@ -93,6 +95,7 @@ class Zipka:
         self.persona = Persona(self.settings)
         self.soft = SoftEvolve(self.persona, self.memory, self.llm)
         self.hard = HardEvolve(self._code_llm(), self.memory, self.settings)
+        self.finetune = FinetuneEvolve(self.memory, self.settings)
         self.books = BookReader(self.llm, self.memory, self.settings)
         self.eyes = Eyes(self.settings)
         self.ears = Ears(self.settings)
@@ -127,6 +130,7 @@ class Zipka:
         self.persona = Persona(self.settings)
         self.soft = SoftEvolve(self.persona, self.memory, self.llm)
         self.hard = HardEvolve(self._code_llm(), self.memory, self.settings)
+        self.finetune = FinetuneEvolve(self.memory, self.settings)
         self.books = BookReader(self.llm, self.memory, self.settings)
         self.eyes = Eyes(self.settings)
         self.ears = Ears(self.settings)
@@ -180,6 +184,16 @@ class Zipka:
             "ears": self.ears.enabled,
             "pending_patch": self.hard.has_pending(),
             "approve_phrase": APPROVE_PHRASE,
+            "pending_finetune": self.finetune.has_pending(),
+            "finetune_approve_phrase": FINETUNE_APPROVE_PHRASE,
+            "finetune": self.finetune.refresh_job_status(),
+            "finetune_lineage": {
+                "generation": self.finetune.load_lineage().get("generation"),
+                "active_gguf": self.finetune.load_lineage().get("active_gguf"),
+                "active_checkpoint": self.finetune.load_lineage().get(
+                    "active_checkpoint"
+                ),
+            },
             "mind": self.mind.load(),
             "proactive": self.proactive.rare_ping_status(),
             "limits": {
@@ -423,6 +437,27 @@ class Zipka:
             self._remember_turn(text, look_reply)
             return look_reply
 
+        if self.finetune.is_approve(text):
+            if not self.finetune.has_pending():
+                st = self.finetune.refresh_job_status()
+                if st.get("state") == "done":
+                    reply = (
+                        f"Дообучение уже завершено (gen {st.get('generation')}). "
+                        f"Результат: {st.get('result')}"
+                    )
+                    self._remember_turn(text, reply)
+                    return reply
+                return "Нечего утверждать — заявки на дообучение нет."
+            try:
+                started = self.finetune.start_approved()
+            except Exception as exc:
+                reply = f"Не смогла запустить дообучение: {exc}"
+                self._remember_turn(text, reply)
+                return reply
+            reply = started.get("message") or str(started)
+            self._remember_turn(text, reply)
+            return reply
+
         if self.hard.is_approve(text):
             if not self.hard.has_pending():
                 return "Нечего утверждать — патча нет."
@@ -438,8 +473,25 @@ class Zipka:
             self._after_code_role()
             return reply
 
+        if self.finetune.has_pending() and any(
+            k in text.lower()
+            for k in ("дообуч", "gguf", "lora", "fine-tune", "finetune")
+        ):
+            return self.finetune.format_pending()
+
         if self.hard.has_pending() and "патч" in text.lower():
             return self.hard.format_pending()
+
+        if self.finetune.wants_finetune(text):
+            try:
+                pending = self.finetune.propose()
+            except Exception as exc:
+                reply = f"Не смогла подготовить дообучение: {exc}"
+                self._remember_turn(text, reply)
+                return reply
+            reply = self.finetune.format_pending(pending)
+            self._remember_turn(text, reply)
+            return reply
 
         code_request = self._code_change_request(text)
         if code_request:

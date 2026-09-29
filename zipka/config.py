@@ -80,6 +80,11 @@ def ensure_data_dirs(settings: Settings | None = None) -> Path:
         "mind",
         "models",
         "settings",
+        "finetune",
+        "finetune/datasets",
+        "finetune/adapters",
+        "finetune/checkpoints",
+        "finetune/jobs",
     ):
         (base / sub).mkdir(parents=True, exist_ok=True)
     return base

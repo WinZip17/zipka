@@ -30,12 +30,16 @@ import {
   approvePatch,
   earsAction,
   eyesAction,
+  fetchFinetuneStatus,
   learn,
+  proposeFinetune,
   resetInfo,
   resetLearning,
   sendChat,
   setCompute,
   setModels,
+  startFinetune,
+  type FinetuneStatusResponse,
   type StatusResponse,
 } from "../api";
 
@@ -153,6 +157,11 @@ export function SidePanel({
   const [codeGguf, setCodeGguf] = useState("");
   const [modelsBusy, setModelsBusy] = useState(false);
   const [modelsMsg, setModelsMsg] = useState<string | null>(null);
+  const [finetuneBusy, setFinetuneBusy] = useState(false);
+  const [finetuneMsg, setFinetuneMsg] = useState<string | null>(null);
+  const [finetuneInfo, setFinetuneInfo] = useState<FinetuneStatusResponse | null>(
+    null,
+  );
 
   useEffect(() => {
     const c = status?.compute;
@@ -175,6 +184,73 @@ export function SidePanel({
     status?.model_roles?.chat?.filename,
     status?.model_roles?.code?.filename,
   ]);
+
+  const refreshFinetune = async () => {
+    try {
+      const data = await fetchFinetuneStatus();
+      setFinetuneInfo(data);
+      return data;
+    } catch (err) {
+      setFinetuneMsg(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    void refreshFinetune();
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const state = finetuneInfo?.status?.state;
+    if (state !== "running" && state !== "succeeded_pending_apply") return;
+    const id = window.setInterval(() => {
+      void refreshFinetune().then(() => onRefresh());
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [settingsOpen, finetuneInfo?.status?.state, onRefresh]);
+
+  const onProposeFinetune = async () => {
+    setFinetuneBusy(true);
+    setFinetuneMsg(null);
+    try {
+      const data = await proposeFinetune();
+      setFinetuneMsg(data.message || "Заявка на дообучение подготовлена.");
+      await refreshFinetune();
+      onRefresh();
+    } catch (err) {
+      setFinetuneMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFinetuneBusy(false);
+    }
+  };
+
+  const onStartFinetune = async () => {
+    const phrase =
+      finetuneInfo?.approve_phrase ||
+      status?.finetune_approve_phrase ||
+      "разрешаю дообучение";
+    if (
+      !window.confirm(
+        `Запустить LoRA-дообучение?\nНужна фраза «${phrase}».\nПроцесс долгий и нагружает GPU/CPU.`,
+      )
+    ) {
+      return;
+    }
+    setFinetuneBusy(true);
+    setFinetuneMsg(null);
+    try {
+      const data = await startFinetune();
+      setFinetuneMsg(data.message || `Запущено: ${data.job_id || ""}`);
+      await refreshFinetune();
+      onRefresh();
+    } catch (err) {
+      setFinetuneMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFinetuneBusy(false);
+    }
+  };
 
   const applyCompute = async () => {
     setComputeBusy(true);
@@ -1062,6 +1138,106 @@ export function SidePanel({
           >
             {computeBusy ? "Применяю…" : "Применить compute"}
           </Button>
+
+          <Divider sx={{ mb: 2 }} />
+
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 700 }}>
+            Дообучение (LoRA → GGUF)
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.25 }}>
+            Вшить диалоги в веса и получить новый{" "}
+            <code>zipka-self-gen…gguf</code>. Лучше чат на Qwen2.5/Qwen3. Нужно:{" "}
+            <code>pip install -e &quot;.[finetune]&quot;</code>. Экспорт GGUF — через llama.cpp.
+          </Typography>
+          <Stack spacing={0.35} sx={{ mb: 1.25 }}>
+            <InfoLine
+              label="Поколение"
+              value={
+                finetuneInfo?.lineage?.generation ??
+                status?.finetune_lineage?.generation ??
+                "—"
+              }
+            />
+            <InfoLine
+              label="Статус"
+              value={
+                [
+                  finetuneInfo?.status?.state || status?.finetune?.state || "idle",
+                  finetuneInfo?.status?.phase
+                    ? `· ${finetuneInfo.status.phase}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+              }
+            />
+            <InfoLine
+              label="Активный GGUF"
+              value={
+                finetuneInfo?.lineage?.active_gguf ||
+                status?.finetune_lineage?.active_gguf ||
+                "—"
+              }
+            />
+            {finetuneInfo?.pending ? (
+              <InfoLine
+                label="Заявка"
+                value={`gen ${finetuneInfo.pending.generation ?? "?"} · ${finetuneInfo.pending.pairs ?? "?"} пар → ${finetuneInfo.pending.export_gguf_name || "gguf"}`}
+              />
+            ) : null}
+            {finetuneInfo?.status?.error ? (
+              <Typography variant="caption" color="error" sx={{ display: "block" }}>
+                {String(finetuneInfo.status.error)}
+              </Typography>
+            ) : null}
+          </Stack>
+          {finetuneMsg && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+            >
+              {finetuneMsg}
+            </Typography>
+          )}
+          <Stack spacing={1} sx={{ mb: 2.5 }}>
+            <Button
+              fullWidth
+              variant="outlined"
+              disabled={busy || finetuneBusy}
+              onClick={() => void refreshFinetune().then(() => onRefresh())}
+            >
+              Обновить статус
+            </Button>
+            <Button
+              fullWidth
+              variant="contained"
+              disabled={
+                busy ||
+                finetuneBusy ||
+                finetuneInfo?.status?.state === "running"
+              }
+              onClick={() => void onProposeFinetune()}
+            >
+              {finetuneBusy ? "Готовлю…" : "Подготовить дообучение"}
+            </Button>
+            <Button
+              fullWidth
+              variant="contained"
+              color="secondary"
+              disabled={
+                busy ||
+                finetuneBusy ||
+                !finetuneInfo?.pending ||
+                finetuneInfo?.status?.state === "running"
+              }
+              onClick={() => void onStartFinetune()}
+            >
+              {finetuneInfo?.approve_phrase ||
+                status?.finetune_approve_phrase ||
+                "Разрешаю дообучение"}
+            </Button>
+          </Stack>
 
           <Divider sx={{ mb: 2 }} />
 

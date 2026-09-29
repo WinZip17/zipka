@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from zipka.agent import Zipka
 from zipka.evolve.hard import APPROVE_PHRASE
+from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
 from zipka.reset import CONFIRM_PHRASE
 from zipka.runtime_settings import compute_status
 from zipka.llm.chat_models import models_status
@@ -299,6 +300,37 @@ def api_approve() -> dict:
 def api_pending() -> dict:
     pending = agent.hard.load_pending()
     return {"pending": pending, "approve_phrase": APPROVE_PHRASE}
+
+
+@app.get("/api/finetune/status")
+def api_finetune_status() -> dict:
+    return {
+        "status": agent.finetune.refresh_job_status(),
+        "pending": agent.finetune.load_pending(),
+        "lineage": agent.finetune.load_lineage(),
+        "approve_phrase": FINETUNE_APPROVE_PHRASE,
+    }
+
+
+@app.post("/api/finetune/propose")
+def api_finetune_propose() -> dict:
+    try:
+        pending = agent.finetune.propose()
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "pending": pending,
+        "message": agent.finetune.format_pending(pending),
+        "approve_phrase": FINETUNE_APPROVE_PHRASE,
+    }
+
+
+@app.post("/api/finetune/start")
+def api_finetune_start() -> dict:
+    try:
+        return agent.finetune.start_approved()
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/reflect")

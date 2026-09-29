@@ -364,6 +364,44 @@ def learn(query: str = typer.Argument(..., help="URL или тема")) -> None:
     )
 
 
+@app.command("finetune")
+def finetune_cmd(
+    action: str = typer.Argument(
+        "status",
+        help="status|propose|start|lineage",
+    ),
+    max_steps: int = typer.Option(60, help="Шагов LoRA"),
+    lora_r: int = typer.Option(8, help="Rank LoRA"),
+) -> None:
+    """Дообучение чатовой модели на диалогах (LoRA → новый GGUF)."""
+    z = _agent()
+    action = action.lower().strip()
+    if action == "status":
+        st = z.finetune.refresh_job_status()
+        console.print(Panel(str(st), title="finetune status"))
+        return
+    if action == "lineage":
+        console.print(Panel(str(z.finetune.load_lineage()), title="lineage"))
+        return
+    if action == "propose":
+        try:
+            pending = z.finetune.propose(max_steps=max_steps, lora_r=lora_r)
+        except Exception as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        console.print(Panel(z.finetune.format_pending(pending), title="propose"))
+        return
+    if action == "start":
+        try:
+            started = z.finetune.start_approved()
+        except Exception as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        console.print(Panel(str(started), title="started"))
+        return
+    raise typer.BadParameter("status|propose|start|lineage")
+
+
 @app.command()
 def web(
     host: str = typer.Option("127.0.0.1"),
