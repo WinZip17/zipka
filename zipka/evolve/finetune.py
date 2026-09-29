@@ -855,19 +855,67 @@ class FinetuneEvolve:
         return self.load_status()
 
     def abort_running(self, *, kill: bool = True) -> dict[str, Any]:
-        """Прервать/сбросить зависшее или идущее дообучение."""
+        """Прервать/сбросить дообучение и очистить сообщения об ошибках."""
         with self._lock:
             st = self.refresh_job_status()
-            if st.get("state") != "running":
-                # уже не running после refresh (interrupted/failed/done)
+            finished = _utc_now()
+
+            def _clear_status(
+                *,
+                state: str,
+                note: str,
+                pid: Any = None,
+                killed: bool = False,
+            ) -> dict[str, Any]:
+                job_path = st.get("job_path")
+                job = None
+                if job_path and Path(str(job_path)).is_file():
+                    try:
+                        job = json.loads(Path(str(job_path)).read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        job = None
+                if job is not None:
+                    job = dict(job)
+                    if job.get("status") == "running":
+                        job["status"] = "aborted"
+                    # убрать текст ошибки из job
+                    job.pop("error", None)
+                    job["finished_at"] = finished
+                    job["abort_note"] = note
+                    try:
+                        Path(str(job_path)).write_text(
+                            json.dumps(job, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    except OSError:
+                        pass
+                cleaned = {
+                    "state": state,
+                    "job_id": st.get("job_id"),
+                    "generation": st.get("generation"),
+                    "phase": st.get("phase"),
+                    "pid": pid if pid is not None else st.get("pid"),
+                    "log": st.get("log"),
+                    "job_path": job_path,
+                    "started_at": st.get("started_at")
+                    or (job or {}).get("started_at"),
+                    "finished_at": finished,
+                    # error намеренно не пишем — UI очищается
+                }
+                self._write_status(cleaned)
                 return {
                     "ok": True,
-                    "status": st,
-                    "message": (
-                        f"Сейчас state={st.get('state')}. "
-                        + (str(st.get("error") or "")).strip()
-                    ).strip(),
+                    "killed": killed,
+                    "status": self.load_status(),
+                    "message": note,
                 }
+
+            if st.get("state") != "running":
+                return _clear_status(
+                    state="idle",
+                    note="Статус сброшен, сообщения об ошибках очищены.",
+                )
+
             pid = st.get("pid")
             killed = False
             if kill and pid is not None and _is_pid_alive(pid):
@@ -888,26 +936,16 @@ class FinetuneEvolve:
                         "status": st,
                         "message": f"Не удалось остановить pid {pid}: {exc}",
                     }
-            job = None
-            job_path = st.get("job_path")
-            if job_path and Path(str(job_path)).is_file():
-                try:
-                    job = json.loads(Path(str(job_path)).read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    job = None
-            st2 = self._mark_interrupted(
-                st,
-                job=job,
-                error=(
-                    f"Дообучение прервано вручную"
-                    + (f" (pid {pid})" if pid else "")
-                    + ("." if killed or not pid else " — процесс уже не работал.")
-                ),
-                state="interrupted",
+
+            note = (
+                "Дообучение прервано вручную"
+                + (f" (pid {pid})" if pid else "")
+                + ("." if killed or not pid else " — процесс уже не работал.")
+                + " Ошибки очищены."
             )
-            return {
-                "ok": True,
-                "killed": killed,
-                "status": st2,
-                "message": st2.get("error") or "Сброшено.",
-            }
+            return _clear_status(
+                state="idle",
+                note=note,
+                pid=pid,
+                killed=killed,
+            )

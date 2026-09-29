@@ -164,6 +164,10 @@ DJVU: читается через встроенный пакет **`djvu-rs`** 
 
 ```bash
 pip install -e ".[finetune]"
+# ВАЖНО: pip по умолчанию часто ставит torch+cpu. Для GPU (VRAM+RAM):
+pip uninstall -y torch
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+# проверка: python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 # для экспорта GGUF: llama.cpp convert_hf_to_gguf.py + llama-quantize
 # set ZIPKA_LLAMA_CONVERT=C:\path\to\llama.cpp\convert_hf_to_gguf.py
 # set ZIPKA_LLAMA_QUANTIZE=C:\path\to\llama-quantize.exe
@@ -178,7 +182,9 @@ pip install -e ".[finetune]"
 4. Экспорт → `data/models/zipka-self-genNNNN.*.gguf`, переключение chat GGUF
 5. Следующий круг стартует с этого checkpoint
 
-**Важно:** Pathfinder сейчас только как GGUF — для первого круга поставь чат на **Qwen2.5-7B** (8GB VRAM ок с 4-bit, если есть bitsandbytes) или укажи `override_hf_base` в `data/finetune/lineage.json`. На Windows без bnb обучение тяжелее.
+Обучение грузит модель через `device_map=auto`: слои на **VRAM**, остаток на **ОЗУ** (и при нехватке — disk offload). На RTX 4060 8GB для Qwen3-8B лучше 4-bit (`bitsandbytes`).
+
+**Важно:** Pathfinder сейчас только как GGUF — для первого круга поставь чат на **Qwen2.5-7B** / **Qwen3-8B** (8GB VRAM ок с 4-bit) или укажи `override_hf_base` в `data/finetune/lineage.json`. Без CUDA-torch обучение идёт только на CPU/RAM и для 8B почти всегда OOM.
 
 CLI: `python -m zipka.main finetune propose` → `… start` → `… status`.
 

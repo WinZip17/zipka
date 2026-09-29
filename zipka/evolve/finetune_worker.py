@@ -92,6 +92,49 @@ def _available_ram_bytes() -> int | None:
         return None
 
 
+def _vram_bytes() -> int | None:
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        return int(torch.cuda.get_device_properties(0).total_memory)
+    except Exception:
+        return None
+
+
+def _torch_cuda_hint() -> str | None:
+    """Если nvidia есть, а torch CPU-only — подсказать переустановку."""
+    try:
+        import torch
+    except Exception:
+        return None
+    if torch.cuda.is_available():
+        return None
+    # nvidia-smi без CUDA в torch
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            ["nvidia-smi", "-L"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if r.returncode != 0 or "GPU" not in (r.stdout or ""):
+            return None
+    except Exception:
+        return None
+    ver = getattr(torch, "__version__", "?")
+    return (
+        f"Обнаружена NVIDIA GPU, но PyTorch без CUDA (torch={ver}). "
+        "Переустанови: pip uninstall -y torch && "
+        "pip install torch --index-url https://download.pytorch.org/whl/cu126 "
+        "(или cu130). Тогда дообучение будет на VRAM+RAM."
+    )
+
+
 def _estimate_params_b(model_src: str) -> float:
     low = str(model_src).lower()
     for hint, n in (
@@ -111,6 +154,19 @@ def _estimate_params_b(model_src: str) -> float:
 
 def _estimate_load_bytes(model_src: str, *, bytes_per_param: float) -> int:
     return int(_estimate_params_b(model_src) * 1e9 * bytes_per_param * 1.35)
+
+
+def _exc_text(exc: BaseException) -> str:
+    """MemoryError и часть OSError дают пустой str() — показываем имя типа."""
+    name = type(exc).__name__
+    msg = str(exc).strip()
+    return f"{name}: {msg}" if msg else name
+
+
+def _format_gb(n: float | int | None) -> str:
+    if n is None:
+        return "?"
+    return f"{float(n) / 1e9:.1f} ГБ"
 
 
 def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
@@ -145,6 +201,8 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     ckpt_dir = Path(job["checkpoint_dir"])
     adapter_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+    offload_dir = adapter_dir / "offload"
+    offload_dir.mkdir(parents=True, exist_ok=True)
 
     _write_status(data_dir, {"phase": "load_model", "model": str(model_src)})
     _log(f"Loading tokenizer/model: {model_src}")
@@ -154,13 +212,17 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
         tokenizer.pad_token = tokenizer.eos_token
 
     cuda = bool(torch.cuda.is_available())
+    cuda_hint = _torch_cuda_hint()
+    if cuda_hint:
+        _log(cuda_hint)
     # На CPU fp32 для 8B ≈ 32 ГБ — почти всегда OOM. Грузим веса в fp16.
     dtype = torch.float16
     load_kwargs: dict[str, Any] = {
         "trust_remote_code": True,
-        "torch_dtype": dtype,
         "low_cpu_mem_usage": True,
+        "torch_dtype": dtype,
     }
+
     # 4-bit если есть bitsandbytes (на Windows часто нет)
     use_4bit = False
     try:
@@ -182,33 +244,76 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
 
     bytes_per_param = 0.5 if use_4bit else 2.0
     need = _estimate_load_bytes(str(model_src), bytes_per_param=bytes_per_param)
+    # Пик при materialize/copy часто на 40–50% выше размера весов
+    peak = int(need * 1.45)
     avail = _available_ram_bytes()
-    avail_s = f"{avail / 1e9:.1f} ГБ" if avail is not None else "?"
+    vram = _vram_bytes() if cuda else None
+    pool = (avail or 0) + (vram or 0)
     _log(
         f"cuda={cuda} use_4bit={use_4bit} dtype={dtype} "
-        f"estimate_load≈{need / 1e9:.1f} ГБ available_ram≈{avail_s}"
+        f"estimate_weights≈{_format_gb(need)} peak≈{_format_gb(peak)} "
+        f"available_ram≈{_format_gb(avail)} vram≈{_format_gb(vram)} "
+        f"pool≈{_format_gb(pool or None)}"
     )
-    if avail is not None and need > avail:
+    if cuda_hint and not cuda:
+        raise RuntimeError(cuda_hint)
+    budget = pool if cuda else avail
+    if budget and peak > budget and not use_4bit:
         raise RuntimeError(
-            f"Не хватает RAM для загрузки {model_src}: "
-            f"оценка ~{need / 1e9:.1f} ГБ, доступно ~{avail / 1e9:.1f} ГБ. "
-            "Закрой лишние программы, убедись что чат-GGUF выгружен, "
-            "поставь CUDA + bitsandbytes, либо укажи меньшую HF-базу "
-            "(override_hf_base в data/finetune/lineage.json)."
+            f"Скорее всего не хватит памяти для {model_src}: "
+            f"веса ≈{_format_gb(need)}, пик ≈{_format_gb(peak)}, "
+            f"RAM+VRAM ≈{_format_gb(budget)}. "
+            "Поставь bitsandbytes (4-bit), освободи память, либо меньшую HF-базу "
+            "(override_hf_base, напр. Qwen/Qwen2.5-3B-Instruct)."
         )
 
-    if cuda and not use_4bit:
-        load_kwargs["device_map"] = "auto"
-    elif not cuda:
-        # CPU: не тянем всё сразу через device_map без нужды
-        load_kwargs.pop("device_map", None)
+    # Гибрид: GPU VRAM + CPU RAM (+ disk offload)
+    load_kwargs["device_map"] = "auto"
+    load_kwargs["offload_folder"] = str(offload_dir)
+    max_memory: dict[Any, str] = {}
+    if cuda and vram is not None:
+        gpu_budget_gb = max(2, int(vram / 1e9) - 1)
+        max_memory[0] = f"{gpu_budget_gb}GiB"
+    if avail is not None:
+        cpu_budget_gb = max(4, int(avail / 1e9) - 3)
+        max_memory["cpu"] = f"{cpu_budget_gb}GiB"
+    if max_memory:
+        load_kwargs["max_memory"] = max_memory
+        _log(f"max_memory={max_memory}")
+
+    def _load_model(kwargs: dict[str, Any]):
+        return AutoModelForCausalLM.from_pretrained(model_src, **kwargs)
 
     try:
-        model = AutoModelForCausalLM.from_pretrained(model_src, **load_kwargs)
+        model = _load_model(load_kwargs)
+    except MemoryError as exc:
+        _log(f"MemoryError при загрузке, пробую жёсткий offload: {_exc_text(exc)}")
+        retry = dict(load_kwargs)
+        retry["device_map"] = "auto"
+        retry["offload_folder"] = str(offload_dir)
+        retry["offload_state_dict"] = True
+        retry_mem = dict(max_memory) if max_memory else {}
+        if avail is not None:
+            retry_mem["cpu"] = f"{max(4, int(avail / 1e9) - 4)}GiB"
+        if cuda and vram is not None:
+            retry_mem[0] = f"{max(2, int(vram / 1e9) - 2)}GiB"
+        if retry_mem:
+            retry["max_memory"] = retry_mem
+        try:
+            model = _load_model(retry)
+        except Exception as exc2:
+            raise RuntimeError(
+                f"Не удалось загрузить {model_src}: {_exc_text(exc2)}. "
+                f"Пик≈{_format_gb(peak)}, RAM≈{_format_gb(avail)}, "
+                f"VRAM≈{_format_gb(vram)}. "
+                "Нужны CUDA+bitsandbytes или меньшая база "
+                "(override_hf_base → Qwen/Qwen2.5-3B-Instruct)."
+            ) from exc2
     except Exception as exc:
         raise RuntimeError(
-            f"Не удалось загрузить {model_src}: {exc}. "
-            f"Память: нужно≈{need / 1e9:.1f} ГБ, доступно≈{avail_s}."
+            f"Не удалось загрузить {model_src}: {_exc_text(exc)}. "
+            f"Пик≈{_format_gb(peak)}, RAM≈{_format_gb(avail)}, "
+            f"VRAM≈{_format_gb(vram)}."
         ) from exc
     if use_4bit:
         from peft import prepare_model_for_kbit_training
@@ -233,13 +338,12 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     )
     model = get_peft_model(model, lora)
     model.print_trainable_parameters()
-    if not cuda:
-        try:
-            model.enable_input_require_grads()
-            model.gradient_checkpointing_enable()
-            _log("CPU: gradient checkpointing включён")
-        except Exception as exc:
-            _log(f"gradient_checkpointing skip: {exc}")
+    try:
+        model.enable_input_require_grads()
+        model.gradient_checkpointing_enable()
+        _log("gradient checkpointing включён")
+    except Exception as exc:
+        _log(f"gradient_checkpointing skip: {exc}")
 
     def tok_map(batch: dict[str, list[str]]) -> dict[str, Any]:
         texts = [
@@ -277,7 +381,7 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
         save_steps=max_steps,
         fp16=cuda and not use_4bit,
         bf16=False,
-        gradient_checkpointing=not cuda,
+        gradient_checkpointing=True,
         report_to=[],
         remove_unused_columns=False,
         optim="paged_adamw_8bit" if use_4bit else "adamw_torch",

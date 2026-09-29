@@ -392,7 +392,7 @@ export function SidePanel({
   const onAbortFinetune = async () => {
     if (
       !window.confirm(
-        "Сбросить / прервать дообучение? Зависший статус «running» тоже снимется.",
+        "Сбросить / прервать дообучение? Зависший статус «running» тоже снимется, ошибки очистятся.",
       )
     ) {
       return;
@@ -401,8 +401,12 @@ export function SidePanel({
     setFinetuneMsg(null);
     try {
       const data = await abortFinetune();
-      setFinetuneMsg(data.message || "Сброшено.");
       await refreshFinetune();
+      setFinetuneMsg(
+        data.ok === false
+          ? data.message || "Ошибка сброса"
+          : data.message || "Сброшено.",
+      );
       onRefresh();
     } catch (err) {
       setFinetuneMsg(err instanceof Error ? err.message : String(err));
