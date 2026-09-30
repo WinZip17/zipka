@@ -60,6 +60,11 @@ import {
   type NewsTelegramSource,
   type StatusResponse,
 } from "../api";
+import {
+  getNotifyVolume,
+  playReplySound,
+  setNotifyVolume,
+} from "../notifySound";
 
 type Props = {
   status: StatusResponse | null;
@@ -208,6 +213,9 @@ export function SidePanel({
   const [sensorsFeatureBusy, setSensorsFeatureBusy] = useState(false);
   const [sensorsFeatureMsg, setSensorsFeatureMsg] = useState<string | null>(
     null,
+  );
+  const [notifyVolumePct, setNotifyVolumePct] = useState(() =>
+    Math.round(getNotifyVolume() * 100),
   );
   const [finetuneBusy, setFinetuneBusy] = useState(false);
   const [finetuneMsg, setFinetuneMsg] = useState<string | null>(null);
@@ -759,9 +767,11 @@ export function SidePanel({
       try {
         const data = await sendChat(message);
         onBubble(data.reply || "(пустой ответ)", "bot");
+        playReplySound();
         onRefresh();
       } catch (err) {
         onBubble(err instanceof Error ? err.message : String(err), "bot");
+        playReplySound();
       }
     });
   };
@@ -1692,6 +1702,50 @@ export function SidePanel({
                   {sensorsFeatureMsg}
                 </Typography>
               )}
+
+              <Typography
+                variant="subtitle2"
+                color="text.secondary"
+                sx={{ mt: 2, mb: 1, fontWeight: 700 }}
+              >
+                Звук ответа
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mb: 1 }}
+              >
+                Сигнал, когда Зипка ответила в чате (долгие ответы). Громкость 0 —
+                без звука.
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Громкость: {notifyVolumePct}%
+                {notifyVolumePct === 0 ? " (выкл)" : ""}
+              </Typography>
+              <Slider
+                size="small"
+                min={0}
+                max={100}
+                step={5}
+                value={notifyVolumePct}
+                valueLabelDisplay="auto"
+                valueLabelFormat={(v) => `${v}%`}
+                onChange={(_e, v) => {
+                  const pct = Array.isArray(v) ? v[0] : v;
+                  setNotifyVolumePct(pct);
+                  setNotifyVolume(pct / 100);
+                }}
+                sx={{ mb: 1, mt: 0.5 }}
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={notifyVolumePct === 0}
+                onClick={() => playReplySound()}
+                sx={{ mb: 1 }}
+              >
+                Прослушать
+              </Button>
               <Accordion
                 disableGutters
                 elevation={0}

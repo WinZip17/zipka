@@ -17,6 +17,7 @@ import {
 import { Composer } from "./components/Composer";
 import { MessageList, type Bubble } from "./components/MessageList";
 import { SidePanel } from "./components/SidePanel";
+import { playReplySound, unlockReplySound } from "./notifySound";
 
 const PAGE_SIZE = 30;
 
@@ -238,6 +239,7 @@ export default function App() {
   const onSend = async (message: string) => {
     if (busy || statusRef.current?.finetune?.state === "running") return;
     setBusy(true);
+    unlockReplySound();
     const activeReply = replyTo;
     setReplyTo(null);
     try {
@@ -254,9 +256,11 @@ export default function App() {
             message || null,
           );
           addBubble(data.reply || data.digest || "Готово", "bot");
+          playReplySound();
           void refreshStatus();
         } catch (err) {
           addBubble(err instanceof Error ? err.message : String(err), "bot");
+          playReplySound();
         }
         return;
       }
@@ -282,9 +286,11 @@ export default function App() {
           reply_chain: chain,
         });
         addBubble(data.reply || "(пустой ответ)", "bot");
+        playReplySound();
         void refreshStatus();
       } catch (err) {
         addBubble(err instanceof Error ? err.message : String(err), "bot");
+        playReplySound();
       }
     } finally {
       setThinking(null);
