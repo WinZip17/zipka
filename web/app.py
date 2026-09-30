@@ -619,3 +619,9 @@ def index() -> FileResponse:
 # Serve Vite build assets (must be after API routes)
 if (DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
+
+_sounds_dir = DIST / "sounds"
+if not _sounds_dir.is_dir():
+    _sounds_dir = ROOT / "frontend" / "public" / "sounds"
+if _sounds_dir.is_dir():
+    app.mount("/sounds", StaticFiles(directory=str(_sounds_dir)), name="sounds")

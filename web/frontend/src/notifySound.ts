@@ -3,7 +3,7 @@
 const STORAGE_KEY = "zipka.notify_volume";
 /** 0…1, дефолт умеренный */
 const DEFAULT_VOLUME = 0.45;
-const SOUND_URL = "/sounds/oh-oh-icq.mp3";
+const SOUND_PATH = "/sounds/oh-oh-icq.mp3";
 
 let audioEl: HTMLAudioElement | null = null;
 
@@ -31,13 +31,31 @@ export function setNotifyVolume(volume: number): number {
   return v;
 }
 
+function soundUrl(): string {
+  if (typeof window === "undefined") return SOUND_PATH;
+  // cache-bust при смене файла; относительный путь к тому же origin, что и UI
+  return `${SOUND_PATH}?v=1`;
+}
+
 function ensureAudio(): HTMLAudioElement | null {
   if (typeof Audio === "undefined") return null;
   if (!audioEl) {
-    audioEl = new Audio(SOUND_URL);
+    audioEl = new Audio(soundUrl());
     audioEl.preload = "auto";
   }
   return audioEl;
+}
+
+function resetAudio(): HTMLAudioElement | null {
+  if (audioEl) {
+    try {
+      audioEl.pause();
+    } catch {
+      /* ignore */
+    }
+    audioEl = null;
+  }
+  return ensureAudio();
 }
 
 /** Разблокировать автоплей после жеста пользователя (отправка сообщения). */
@@ -65,19 +83,32 @@ export function unlockReplySound(): void {
   }
 }
 
-/** Сыграть звук ответа; при громкости 0 — ничего. */
-export function playReplySound(): void {
+/**
+ * Сыграть звук ответа; при громкости 0 — ничего.
+ * Возвращает ошибку строкой, если не удалось (для кнопки «Прослушать»).
+ */
+export async function playReplySound(): Promise<string | null> {
   const vol = getNotifyVolume();
-  if (vol <= 0) return;
-  const el = ensureAudio();
-  if (!el) return;
+  if (vol <= 0) return null;
+  let el = ensureAudio();
+  if (!el) return "Audio API недоступен";
   try {
     el.volume = vol;
     el.currentTime = 0;
-    void el.play().catch(() => {
-      /* autoplay blocked */
-    });
-  } catch {
-    /* ignore */
+    await el.play();
+    return null;
+  } catch (first) {
+    // чаще всего битый кэш / 404 при первом создании — пересоздаём
+    el = resetAudio();
+    if (!el) return "Не удалось создать Audio";
+    try {
+      el.volume = vol;
+      el.currentTime = 0;
+      await el.play();
+      return null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `Звук не сыграл: ${msg}. Проверь /sounds/oh-oh-icq.mp3`;
+    }
   }
 }

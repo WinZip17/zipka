@@ -219,6 +219,7 @@ export function SidePanel({
   const [notifyVolumePct, setNotifyVolumePct] = useState(() =>
     Math.round(getNotifyVolume() * 100),
   );
+  const [notifySoundMsg, setNotifySoundMsg] = useState<string | null>(null);
   const [finetuneBusy, setFinetuneBusy] = useState(false);
   const [finetuneMsg, setFinetuneMsg] = useState<string | null>(null);
   const [finetuneInfo, setFinetuneInfo] = useState<FinetuneStatusResponse | null>(
@@ -1782,11 +1783,25 @@ export function SidePanel({
                 size="small"
                 variant="outlined"
                 disabled={notifyVolumePct === 0}
-                onClick={() => playReplySound()}
+                onClick={() => {
+                  setNotifySoundMsg(null);
+                  void playReplySound().then((err) => {
+                    if (err) setNotifySoundMsg(err);
+                  });
+                }}
                 sx={{ mb: 1 }}
               >
                 Прослушать
               </Button>
+              {notifySoundMsg && (
+                <Typography
+                  variant="caption"
+                  color="error"
+                  sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+                >
+                  {notifySoundMsg}
+                </Typography>
+              )}
               <Accordion
                 disableGutters
                 elevation={0}
