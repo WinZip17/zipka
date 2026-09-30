@@ -136,6 +136,19 @@ def handle_llm_reply(agent: Any, ctx: ChatCtx) -> str | None:
     except LlmError as exc:
         agent.user._turn_alert = None
         return str(exc)
+
+    try:
+        from zipka.llm.sanitize import strip_repeated_paren_closers
+
+        recent_asst = [
+            m.get("content") or ""
+            for m in agent.memory.recent_chat(limit=12)
+            if (m.get("role") or "") == "assistant"
+        ]
+        reply = strip_repeated_paren_closers(reply, recent_asst)
+    except Exception:
+        pass
+
     agent._remember_turn(
         text,
         reply,

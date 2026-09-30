@@ -293,3 +293,49 @@ def strip_thinking(text: str) -> str:
     cleaned = enforce_feminine(cleaned.strip())
     cleaned = enforce_addressee_gender(cleaned, load_addressee_gender())
     return cleaned
+
+
+# Хвост вида «(Или ты просто хочешь… 😊)» — часто залипает и копируется из истории
+_TRAILING_PARENS_RE = re.compile(
+    r"(?:[ \t]*\n)?(?:[ \t]*\([^()]{6,280}\))+[ \t]*\n?$",
+    re.UNICODE,
+)
+
+
+def _norm_closer(s: str) -> str:
+    t = s.strip().lower().replace("ё", "е")
+    t = re.sub(r"[^\wа-я]+", " ", t, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def extract_trailing_paren_closer(text: str) -> str | None:
+    m = _TRAILING_PARENS_RE.search(text or "")
+    if not m:
+        return None
+    return m.group(0).strip()
+
+
+def strip_repeated_paren_closers(
+    text: str,
+    recent_assistant: list[str] | None = None,
+) -> str:
+    """Убрать концевые скобки, если такой же хвост уже был в недавних ответах."""
+    raw = text or ""
+    closer = extract_trailing_paren_closer(raw)
+    if not closer:
+        return raw
+    norm = _norm_closer(closer)
+    if len(norm) < 8:
+        return raw
+    for prev in recent_assistant or []:
+        prev_c = extract_trailing_paren_closer(prev or "")
+        if not prev_c:
+            # иногда хвост был в середине последней строки без идеального match —
+            # сравним с последними 200 символами
+            tail = (prev or "")[-220:]
+            if norm and norm in _norm_closer(tail):
+                return _TRAILING_PARENS_RE.sub("", raw).rstrip()
+            continue
+        if _norm_closer(prev_c) == norm:
+            return _TRAILING_PARENS_RE.sub("", raw).rstrip()
+    return raw

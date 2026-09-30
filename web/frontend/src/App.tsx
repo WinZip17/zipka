@@ -1,11 +1,16 @@
 import Box from "@mui/material/Box";
+import Drawer from "@mui/material/Drawer";
+import IconButton from "@mui/material/IconButton";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import { Composer } from "./components/Composer";
 import { MessageList } from "./components/MessageList";
 import { SidePanel } from "./components/SidePanel";
 import { useChatSession } from "./hooks/useChatSession";
+import { useSidePanelOpen } from "./hooks/useSidePanelOpen";
 
 export default function App() {
   const {
@@ -35,16 +40,38 @@ export default function App() {
     resetChat,
   } = useChatSession();
 
+  const { open: sideOpen, toggle: toggleSide, setOpen: setSideOpen, isDesktop } =
+    useSidePanelOpen();
+
+  const sidePanel = (
+    <SidePanel
+      status={status}
+      pending={pending}
+      busy={busy}
+      eyesOn={!!status?.eyes}
+      earsOn={!!status?.ears}
+      archiveMember={archiveMember}
+      onArchiveMember={setArchiveMember}
+      onBubble={addBubble}
+      onThinking={setThinking}
+      onBusy={onBusyFromPanel}
+      onRefresh={() => void refreshStatus()}
+      onResetChat={resetChat}
+      onStageFile={setStagedFile}
+    />
+  );
+
   return (
     <Box
       sx={{
-        maxWidth: 1100,
+        maxWidth: sideOpen && isDesktop ? 1100 : 900,
         mx: "auto",
         height: "100%",
         p: { xs: 1.5, sm: 2 },
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
+        transition: "max-width 0.2s ease",
       }}
     >
       <Stack
@@ -68,11 +95,31 @@ export default function App() {
         >
           Z
         </Box>
-        <Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="h1" sx={{ fontSize: "1.55rem", m: 0 }}>
             Зипка
           </Typography>
         </Box>
+        <Tooltip title={sideOpen ? "Скрыть панель" : "Показать панель"} arrow>
+          <IconButton
+            aria-label={sideOpen ? "Скрыть панель" : "Показать панель"}
+            aria-pressed={sideOpen}
+            onClick={toggleSide}
+            size="small"
+            sx={{
+              border: 1,
+              borderColor: sideOpen ? "primary.main" : "divider",
+              bgcolor: sideOpen ? "rgba(200, 240, 122, 0.12)" : "#24332c",
+              color: sideOpen ? "primary.main" : "text.primary",
+              "&:hover": {
+                bgcolor: sideOpen ? "rgba(200, 240, 122, 0.2)" : "#2c3d34",
+                borderColor: sideOpen ? "primary.main" : "divider",
+              },
+            }}
+          >
+            <ViewSidebarOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </Stack>
 
       <Box
@@ -80,8 +127,12 @@ export default function App() {
           flex: 1,
           minHeight: 0,
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", md: "1.5fr 0.9fr" },
+          gridTemplateColumns: {
+            xs: "1fr",
+            md: sideOpen ? "1.5fr 0.9fr" : "1fr",
+          },
           gap: 2,
+          transition: "grid-template-columns 0.2s ease",
         }}
       >
         <Paper
@@ -101,7 +152,8 @@ export default function App() {
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
-            height: { xs: "min(70vh, 640px)", md: "100%" },
+            height: "100%",
+            minHeight: { xs: "min(70vh, 640px)", md: 0 },
             border: 1,
             borderColor: dropActive ? "primary.main" : "divider",
             outline: dropActive ? "2px dashed" : "none",
@@ -131,32 +183,81 @@ export default function App() {
           />
         </Paper>
 
-        <Paper
-          elevation={0}
-          sx={{
-            border: 1,
-            borderColor: "divider",
-            minHeight: 0,
-            overflow: "hidden",
+        {isDesktop && sideOpen ? (
+          <Paper
+            elevation={0}
+            sx={{
+              border: 1,
+              borderColor: "divider",
+              minHeight: 0,
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {sidePanel}
+          </Paper>
+        ) : null}
+      </Box>
+
+      {!isDesktop ? (
+        <Drawer
+          anchor="right"
+          open={sideOpen}
+          onClose={() => setSideOpen(false)}
+          slotProps={{
+            paper: {
+              sx: {
+                width: "100%",
+                maxWidth: "100vw",
+                bgcolor: "#17201c",
+                backgroundImage: "none",
+                borderLeft: 1,
+                borderColor: "divider",
+              },
+            },
           }}
         >
-          <SidePanel
-            status={status}
-            pending={pending}
-            busy={busy}
-            eyesOn={!!status?.eyes}
-            earsOn={!!status?.ears}
-            archiveMember={archiveMember}
-            onArchiveMember={setArchiveMember}
-            onBubble={addBubble}
-            onThinking={setThinking}
-            onBusy={onBusyFromPanel}
-            onRefresh={() => void refreshStatus()}
-            onResetChat={resetChat}
-            onStageFile={setStagedFile}
-          />
-        </Paper>
-      </Box>
+          <Box
+            sx={{
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              overflow: "hidden",
+            }}
+          >
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{
+                px: 2,
+                py: 1.25,
+                alignItems: "center",
+                borderBottom: 1,
+                borderColor: "divider",
+                flexShrink: 0,
+              }}
+            >
+              <Typography
+                variant="subtitle2"
+                sx={{ flex: 1, fontWeight: 700, color: "text.secondary" }}
+              >
+                Панель
+              </Typography>
+              <IconButton
+                aria-label="Закрыть панель"
+                size="small"
+                onClick={() => setSideOpen(false)}
+                sx={{ color: "text.secondary" }}
+              >
+                <ViewSidebarOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+            <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>{sidePanel}</Box>
+          </Box>
+        </Drawer>
+      ) : null}
     </Box>
   );
 }
