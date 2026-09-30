@@ -1,0 +1,8 @@
+{
+  "compute_mode": "cpu",
+  "gpu_layers": 16,
+  "chat_gguf": "Pathfinder-RP-12B-RU.Q4_K_M.gguf",
+  "code_gguf": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
+  "vision_gguf": "",
+  "vision_mmproj": ""
+}

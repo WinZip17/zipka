@@ -11,6 +11,8 @@
 | `snapshots/` | кадры камеры |
 | `patches/` | hard-evolve бэкапы |
 | `finetune/` | LoRA/adapters/checkpoints (тяжёлые, только локально) |
+| `news/` | источники и выдержки новостей |
 | `models/*.gguf` | локальные GGUF для чата |
+| `settings/runtime.json` | compute / выбранные модели |
 
-В репозитории хранится только этот README, `persona/persona.example.yaml`, `models/README.md`, `finetune/README.md` и лёгкие конфиги (`news/sources.json`, `settings/runtime.json`).
+В репозитории: этот README, `persona/persona.example.yaml`, `models/README.md`, `finetune/README.md`, `news/README.md`, `news/sources.example.json`, `settings/runtime.example.json`.

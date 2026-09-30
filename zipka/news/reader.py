@@ -28,7 +28,11 @@ _NEWS_UPDATE_RE = re.compile(
     r"(?i)(?:новост|rss|телеграм[^\n]{0,20}канал|лент[аы] новост|"
     r"обнови\s+новост|прочитай\s+новост|изучи\s+новост|"
     r"упоминал|упоминани|за\s+последн|"
-    r"что\s+нового\s+в\s+новост|были\s+ли\s+.*\s+в\s+новост)"
+    r"что\s+нового\s+в\s+новост|были\s+ли\s+.*\s+в\s+новост|"
+    r"что\s+(?:было\s+)?интересн\w*.*новост|"
+    r"интересн\w*\s+в\s+(?:последн\w*\s+)?новост|"
+    r"обсуд\w*.*новост|что\s+думаешь.*новост|как\s+тебе\s+новост|"
+    r"мнени\w*.*новост|обзор\s+новост)"
 )
 _DAYS_RE = re.compile(
     r"(?i)за\s+последн(?:ие|юю|ий)\s+(\d+)\s*"
@@ -862,26 +866,9 @@ class NewsDesk:
 
     @staticmethod
     def extract_topic(text: str) -> str | None:
-        # явные «про X» / «о X»
-        m = re.search(
-            r"(?i)(?:про|о|об|насчёт|насчет)\s+[«\"]?"
-            r"([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9\-\.& ]{0,40}?)"
-            r"[»\"]?(?=\s+в\s+новост|\s+за\s+|\s*\?|$)",
-            text,
-        )
-        if m:
-            topic = m.group(1).strip(" .,!?:;")
-            if topic.lower() not in {"новостях", "новости", "ленте", "канале"}:
-                return topic
-        # «упоминания Озон» / «упоминали Wildberries»
-        m2 = re.search(
-            r"(?i)упоминал\w*\s+(?:про\s+|о\s+)?"
-            r"[«\"]?([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9\-\.& ]{1,40})[»\"]?",
-            text,
-        )
-        if m2:
-            return m2.group(1).strip(" .,!?:;")
-        return None
+        from zipka.news.dialogue import extract_topic as _extract_topic
+
+        return _extract_topic(text)
 
     @staticmethod
     def item_source_url(item: dict[str, Any]) -> str:
@@ -924,46 +911,9 @@ class NewsDesk:
         return "\n".join(lines).rstrip()
 
     def answer_news_question(self, text: str) -> str | None:
-        if not _NEWS_UPDATE_RE.search(text):
-            return None
-        low = text.lower()
-        # ingest commands handled elsewhere
-        if any(
-            k in low
-            for k in (
-                "обнови новости",
-                "прочитай новости",
-                "изучи новости",
-                "добавь rss",
-                "добавь телеграм",
-                "покажи источники",
-            )
-        ):
-            return None
-        topic = self.extract_topic(text)
-        days = self.extract_days(text, default=7)
-        if not topic:
-            # общий обзор
-            items = [
-                r
-                for r in self.load_items(limit=200)
-                if (
-                    (_parse_dt(r.get("published_at")) or _parse_dt(r.get("fetched_at")) or _utc_now())
-                    >= _utc_now() - timedelta(days=days)
-                )
-            ]
-            if not items:
-                return (
-                    f"За {days} дн. сохранённых новостей нет. "
-                    "Скажи «обнови новости» после настройки источников."
-                )
-            lines = [f"Краткий обзор за {days} дн. ({len(items)} выдержек):", ""]
-            for h in items[-8:]:
-                lines.append(self.format_hit_block(h))
-                lines.append("")
-            return "\n".join(lines).rstrip()
-        hits = self.search(topic, days=days, limit=15)
-        return self.format_search_answer(topic=topic, days=days, hits=hits)
+        from zipka.news.dialogue import answer_news_dialogue
+
+        return answer_news_dialogue(self, text)
 
     def handle_chat_command(self, text: str) -> str | None:
         low = text.lower().strip()

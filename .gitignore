@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.idea
 
 # --- python ---
 __pycache__/
@@ -36,8 +37,11 @@ data/mind/
 data/snapshots/
 data/patches/
 data/books/
-data/news/
+data/news/**
+!data/news/README.md
+!data/news/sources.example.json
 data/persona/persona.yaml
+data/settings/runtime.json
 data/models/*.gguf
 data/models/**/*.gguf
 !data/models/README.md
@@ -46,6 +50,9 @@ data/finetune/**
 !data/finetune/README.md
 tools/llama.cpp/
 .wheels/
+
+# local smoke / IDE leftovers
+_smoke_hard_evolve.py
 
 # any accidental local dumps
 *.jsonl

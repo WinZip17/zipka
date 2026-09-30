@@ -1,9 +1,0 @@
-{
-  "compute_mode": "gpu",
-  "gpu_layers": 12,
-  "chat_gguf": "zipka-self-gen0001.Q8_0.Q8_0.gguf",
-  "code_gguf": "Qwen3-8B-heretic-Q5_K_M.gguf",
-  "vision_gguf": "moondream2-text-model-f16_ct-vicuna.gguf",
-  "vision_mmproj": "moondream2-mmproj-f16-20250414.gguf",
-  "chat_model_id": "zipka-self-gen0001.Q8_0.Q8_0.gguf"
-}
