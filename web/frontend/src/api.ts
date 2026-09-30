@@ -152,6 +152,9 @@ export type StatusResponse = {
   model_roles?: ChatModelsStatus;
   pending_finetune?: boolean;
   finetune_approve_phrase?: string;
+  pending_soft?: boolean;
+  soft_approve_phrase?: string;
+  soft_evolve_from_dialogue?: boolean;
   finetune?: {
     state?: string;
     job_id?: string;
@@ -398,6 +401,28 @@ export async function setModels(opts: {
     const detail = data.detail;
     throw new Error(
       typeof detail === "string" ? detail : "Не удалось сменить модели",
+    );
+  }
+  return data;
+}
+
+export async function setSoftEvolveDialogue(enabled: boolean) {
+  const res = await fetch("/api/settings/soft-evolve-dialogue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    soft_evolve_from_dialogue?: boolean;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : "Не удалось сохранить soft-evolve",
     );
   }
   return data;

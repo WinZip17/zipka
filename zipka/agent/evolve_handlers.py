@@ -70,6 +70,46 @@ def code_change_request(agent: Any, text: str) -> str | None:
     )
 
 
+def handle_soft_approve(agent: Any, ctx: ChatCtx) -> str | None:
+    text = ctx.text
+    if not agent.soft.is_approve(text):
+        return None
+    if not agent.soft.has_pending():
+        return "Нечего запоминать — предложения soft-evolve нет."
+    try:
+        applied = agent.soft.apply_pending()
+    except Exception as exc:
+        reply = f"Не смогла применить soft-evolve: {exc}"
+        agent._remember_turn(text, reply)
+        return reply
+    reason = applied.get("reason") or "обновилась"
+    reply = f"Запомнила. Soft-evolve: {reason}."
+    agent._remember_turn(text, reply)
+    return reply
+
+
+def handle_soft_decline(agent: Any, ctx: ChatCtx) -> str | None:
+    text = ctx.text
+    if not agent.soft.is_decline(text):
+        return None
+    if not agent.soft.has_pending():
+        return "Отменять нечего — предложения soft-evolve нет."
+    agent.soft.clear_pending()
+    reply = "Ок, не запоминаю."
+    agent._remember_turn(text, reply)
+    return reply
+
+
+def handle_soft_pending_hint(agent: Any, ctx: ChatCtx) -> str | None:
+    text = ctx.text
+    if agent.soft.has_pending() and any(
+        k in text.lower()
+        for k in ("soft", "запомн", "характер", "навык", "предпочтен")
+    ):
+        return agent.soft.format_pending()
+    return None
+
+
 def handle_finetune_approve(agent: Any, ctx: ChatCtx) -> str | None:
     text = ctx.text
     if not agent.finetune.is_approve(text):

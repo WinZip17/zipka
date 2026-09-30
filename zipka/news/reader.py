@@ -154,6 +154,68 @@ def _tg_key(channel: str) -> str:
     return f"tg:{channel}"
 
 
+_PROMPT_LEAK_RE = re.compile(
+    r"(?is)("
+    r"хочу,\s*чтобы\s+ты|"
+    r"хочу\s+получить\s+кратк|"
+    r"переделай\s+выдержк|"
+    r"краткую\s+новостную\s+выдержк|"
+    r"ты\s*[—\-]\s*зипка|"
+    r"я\s+зипка\b|"
+    r"ты\s+зипка\b|"
+    r"стала\s+частью\s+процесса|"
+    r"собираешь\s+информацию|"
+    r"не\s+просто\s+пересказыва|"
+    r"разумел\w*,\s*зипка|"
+    r"не\s+понял,?\s+что\s+именно\s+ты\s+хочешь|"
+    r"уточни,?\s+что\s+именно|"
+    r"напиши\s+ответ\s+пользователю|"
+    r"единственный\s+источник\s+фактов|"
+    r"не\s+цитируй\s+и\s+не\s+пересказывай\s+эти\s+инструкц|"
+    r"разработка:\s*зипка|"
+    r"фрагмент:\s*\d+/\d+|"
+    r"тон:\s*\w+|"
+    r"стиль:\s*информативн|"
+    r"1\s*[–\-]\s*3\s+предложения:\s*суть"
+    r")"
+)
+
+
+def looks_like_prompt_leak(text: str) -> bool:
+    """True, если текст похож на промпт/мета-реплику, а не на выдержку."""
+    raw = (text or "").strip()
+    if len(raw) < 8:
+        return True
+    return bool(_PROMPT_LEAK_RE.search(raw))
+
+
+def sanitize_news_summary(text: str, *, fallback: str = "") -> str:
+    """Убрать промпты и болтовню модели из сохранённой/показанной выдержки."""
+    raw = (text or "").strip()
+    if not raw:
+        return (fallback or "").strip()
+    # обращения / самопрезентация в начале
+    raw = re.sub(
+        r"(?is)^(разумеет\w*|конечно|хорошо|ладно|принято)[,!.]?\s*",
+        "",
+        raw,
+    ).strip()
+    raw = re.sub(r"(?is)^зипка[,!.]?\s*", "", raw).strip()
+    raw = re.sub(r"(?is)^я\s+зипка\s*[—\-:.]+\s*", "", raw).strip()
+    raw = re.sub(r"(?is)^вот\s+кратко\s*[:\-—]?\s*", "", raw).strip()
+    raw = re.sub(r"(?is)^[.…]+\s*", "", raw).strip()
+    # выкинуть служебные блоки «Разработка: Зипка | …»
+    raw = re.sub(
+        r"(?im)^.*(?:разработка:\s*зипка|фрагмент:\s*\d+/\d+|тон:\s*\w+).*\n?",
+        "",
+        raw,
+    ).strip()
+    if looks_like_prompt_leak(raw):
+        fb = (fallback or "").strip()
+        return fb[:500] if fb else ""
+    return raw
+
+
 class NewsDesk:
     """Источники новостей, ingest выдержек, поиск по периоду."""
 
@@ -587,18 +649,22 @@ class NewsDesk:
     ) -> str:
         text = f"Заголовок: {title}\nИсточник: {source}\n\n{body}".strip()
         text = text[:6000]
+        fallback = f"{title}. {body[:400]}".strip()
         try:
-            return self.llm.summarize(
+            raw = self.llm.summarize(
                 text,
                 instruction=(
                     "Сделай краткую новостную выдержку на русском (1–3 предложения): "
-                    "суть, кто/что, зачем важно. Без воды и кликбейта."
+                    "суть, кто/что, зачем важно. Без воды и кликбейта. "
+                    "Выведи ТОЛЬКО текст выдержки, без обращений и без копирования инструкции."
                 ),
             ).strip()
         except Exception as exc:
-            # fallback без LLM
-            snippet = body[:400].strip()
-            return f"{title}. {snippet}".strip() + f" [{exc.__class__.__name__}]"
+            return f"{fallback} [{exc.__class__.__name__}]".strip()
+        cleaned = sanitize_news_summary(raw, fallback=fallback)
+        if not cleaned:
+            return fallback[:500]
+        return cleaned
 
     def fetch_rss_entries(
         self, feed_url: str, *, limit: int = 12
@@ -880,11 +946,15 @@ class NewsDesk:
         when = (h.get("published_at") or h.get("fetched_at") or "")[:10]
         src = h.get("source") or ""
         title = h.get("title") or "Без заголовка"
-        summary = (h.get("summary") or "")[:280]
+        body = str(h.get("text") or h.get("body") or "")
+        summary = sanitize_news_summary(
+            str(h.get("summary") or ""),
+            fallback=(body[:280] if body else title),
+        )
         url = self.item_source_url(h)
         lines = [f"• [{when}] {src}: {title}"]
-        if summary:
-            lines.append(f"  {summary}")
+        if summary and summary.strip() != str(title).strip():
+            lines.append(f"  {summary[:280]}")
         if url:
             lines.append(f"  Первоисточник: {url}")
         else:

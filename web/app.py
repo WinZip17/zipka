@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field
 from zipka.agent import Zipka
 from zipka.evolve.hard import APPROVE_PHRASE
 from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
+from zipka.evolve.soft import APPROVE_PHRASE as SOFT_APPROVE_PHRASE
 from zipka.reset import CONFIRM_PHRASE
-from zipka.runtime_settings import compute_status
+from zipka.runtime_settings import compute_status, load_runtime
 from zipka.llm.chat_models import models_status
 from zipka.system_limits import format_bytes, max_book_bytes
 
@@ -119,6 +120,10 @@ class ModelsIn(BaseModel):
     code_gguf: str | None = None
 
 
+class SoftEvolveDialogueIn(BaseModel):
+    enabled: bool
+
+
 def _spa_index() -> Path:
     index = DIST / "index.html"
     if not index.exists():
@@ -184,6 +189,25 @@ def api_set_models(body: ModelsIn) -> dict:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, f"Не удалось сменить модели: {exc}") from exc
+
+
+@app.get("/api/settings/soft-evolve-dialogue")
+def api_get_soft_evolve_dialogue() -> dict:
+    return {
+        "enabled": bool(load_runtime().get("soft_evolve_from_dialogue")),
+        "pending": agent.soft.has_pending(),
+        "approve_phrase": SOFT_APPROVE_PHRASE,
+    }
+
+
+@app.post("/api/settings/soft-evolve-dialogue")
+def api_set_soft_evolve_dialogue(body: SoftEvolveDialogueIn) -> dict:
+    try:
+        return agent.set_soft_evolve_from_dialogue(body.enabled)
+    except Exception as exc:
+        raise HTTPException(
+            400, f"Не удалось сохранить soft-evolve: {exc}"
+        ) from exc
 
 
 @app.post("/api/chat")

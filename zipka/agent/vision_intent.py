@@ -32,9 +32,46 @@ def denies_vision(text: str) -> bool:
     return any(m in low for m in markers)
 
 
+def _artifact_look_target(text: str) -> bool:
+    """Смотрят проект/файл/книгу/новость/URL — не камеру."""
+    from zipka.agent.books_parse import extract_book_path
+
+    low = text.lower()
+    # явная камера/экран/«на меня» — это глаза, даже если рядом слово «проект»
+    if re.search(
+        r"(?i)("
+        r"камер|глаз|на\s+меня|мои?\s+лиц|"
+        r"eyes\s+(snap|cam|camera|screen|window)|"
+        r"что\s+на\s+экране|скрин|screenshot|монитор|"
+        r"активн\w*\s+окн"
+        r")",
+        low,
+    ):
+        return False
+    if extract_book_path(text):
+        return True
+    if re.search(r"https?://", text, re.IGNORECASE):
+        return True
+    return bool(
+        re.search(
+            r"(?i)("
+            r"проект|папк|репозитор|реп[оа]\b|код(?:у|а|ом)?|"
+            r"книг|стать|архив|новост|исходник|source\s*code|"
+            r"look\s+at\s+(?:the\s+)?(?:project|repo|folder|code|book)"
+            r")",
+            low,
+        )
+    )
+
+
 def look_source(text: str) -> str | None:
-    """cam | screen | window | None — если не просят смотреть."""
+    """cam | screen | window | None — только если просят смотреть глазами/экраном."""
     low = text.lower().strip()
+
+    # «посмотри проект / книгу / новость» — не камера
+    if _artifact_look_target(text):
+        return None
+
     if re.search(r"(?i)\beyes\s+(snap|camera|cam)\b", low):
         return "cam"
     if re.search(r"(?i)\beyes\s+(screen|monitor)\b", low):
@@ -51,30 +88,30 @@ def look_source(text: str) -> str | None:
     window_hit = bool(
         re.search(r"(?i)(активн\w*\s+окн|что\s+в\s+окне|окно\s+впереди)", low)
     )
-    look_hit = bool(
+    # камера: явные формулировки; голое «посмотри» — только без артефакта (уже отфильтровано)
+    cam_hit = bool(
         re.search(
             r"(?i)("
             r"что\s+(ты\s+)?видишь|"
             r"что\s+там\s+видишь|"
-            r"посмотри|"
-            r"взгляни|"
-            r"глянь|"
             r"видишь\s+меня|"
             r"посмотри\s+на\s+меня|"
             r"кадр\s+(с\s+)?камер|"
             r"сним(?:ок|и)\s+(с\s+)?камер|"
             r"открой\s+глаза\s+и\s+посмотри|"
             r"используй\s+камер|"
-            r"посмотр\w*\s+в\s+камер"
+            r"посмотр\w*\s+в\s+камер|"
+            r"посмотр\w*\s+глазами|"
+            r"(?:посмотри|взгляни|глянь)(?!\s+(?:проект|папк|книг|новост|код|файл|репо))"
             r")",
             low,
         )
     )
-    if not (look_hit or screen_hit or window_hit):
+    if not (cam_hit or screen_hit or window_hit):
         return None
-    if screen_hit and not look_hit:
+    if screen_hit and not cam_hit:
         return "screen"
-    if window_hit and not look_hit:
+    if window_hit and not cam_hit:
         return "window"
     if screen_hit:
         return "screen"
@@ -95,13 +132,14 @@ def voice_look(agent: Any, desc: str, *, where: str, user_text: str) -> str:
                     "role": "system",
                     "content": (
                         "Ты Зипка. Тебе УЖЕ дали реальное описание кадра с камеры. "
-                        "Перескажи его от первого лица коротко и живо (1–4 предложения). "
+                        "Перескажи его от первого лица коротко и живо (1–4 предложения) "
+                        "ТОЛЬКО ПО-РУССКИ. "
                         "Можно чуть характера, но факты только из описания. "
                         "СТРОГО ЗАПРЕЩЕНО: говорить что не видишь / нет глаз / "
                         "ты текстовая модель; предлагать «представить»; "
                         "предлагать написать код распознавания; "
                         "выдумывать то, чего нет в описании; "
-                        "здороваться и менять тему."
+                        "здороваться и менять тему; отвечать по-английски."
                     ),
                 },
                 {

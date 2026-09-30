@@ -152,5 +152,18 @@ class PseudoMind:
         self.save(state)
         soft_change = data.get("soft_evolve")
         if isinstance(soft_change, dict) and soft_change.get("apply"):
-            self.soft.apply(soft_change)
+            # при режиме soft-from-dialogue не авто-применяем из reflect
+            if self.soft.dialogue_enabled():
+                if not self.soft.has_pending() and any(
+                    soft_change.get(k)
+                    for k in (
+                        "persona_patch",
+                        "skills_add",
+                        "preferences_patch",
+                        "note",
+                    )
+                ):
+                    self.soft.save_pending(soft_change)
+            else:
+                self.soft.apply(soft_change)
         return state

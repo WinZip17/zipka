@@ -10,6 +10,7 @@ from zipka.config import ensure_data_dirs
 from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
 from zipka.evolve.finetune import FinetuneEvolve
 from zipka.evolve.hard import APPROVE_PHRASE, HardEvolve
+from zipka.evolve.soft import APPROVE_PHRASE as SOFT_APPROVE_PHRASE
 from zipka.evolve.soft import SoftEvolve
 from zipka.llm.base import LlmError
 from zipka.llm.chat_models import models_status, resolve_role_gguf
@@ -82,7 +83,9 @@ def reload_runtime(agent: Any) -> None:
     agent.llm = create_llm_client(agent.settings)
     agent.memory = MemoryStore(agent.settings)
     agent.persona = Persona(agent.settings)
-    agent.soft = SoftEvolve(agent.persona, agent.memory, agent.llm)
+    agent.soft = SoftEvolve(
+        agent.persona, agent.memory, agent.llm, settings=agent.settings
+    )
     agent.hard = HardEvolve(code_llm(agent), agent.memory, agent.settings)
     agent.finetune = FinetuneEvolve(agent.memory, agent.settings)
     agent.books = BookReader(agent.llm, agent.memory, agent.settings)
@@ -142,6 +145,9 @@ def status(agent: Any) -> dict[str, Any]:
         "ears": agent.ears.enabled,
         "pending_patch": agent.hard.has_pending(),
         "approve_phrase": APPROVE_PHRASE,
+        "pending_soft": agent.soft.has_pending(),
+        "soft_approve_phrase": SOFT_APPROVE_PHRASE,
+        "soft_evolve_from_dialogue": agent.soft.dialogue_enabled(),
         "pending_finetune": agent.finetune.has_pending(),
         "finetune_approve_phrase": FINETUNE_APPROVE_PHRASE,
         "finetune": agent.finetune.refresh_job_status(),
@@ -250,3 +256,12 @@ def set_models(
     save_runtime(patch, agent.settings)
     reloaded = reload_llm(agent)
     return {"ok": True, **reloaded}
+
+
+def set_soft_evolve_from_dialogue(agent: Any, enabled: bool) -> dict[str, Any]:
+    """Вкл/выкл фоновый soft-evolve из диалога (pending + approve)."""
+    save_runtime({"soft_evolve_from_dialogue": bool(enabled)}, agent.settings)
+    return {
+        "ok": True,
+        "soft_evolve_from_dialogue": agent.soft.dialogue_enabled(),
+    }

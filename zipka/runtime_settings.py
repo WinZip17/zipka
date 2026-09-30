@@ -17,6 +17,7 @@ DEFAULT_RUNTIME: dict[str, Any] = {
     "code_gguf": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
     "vision_gguf": "",
     "vision_mmproj": "",
+    "soft_evolve_from_dialogue": False,
 }
 
 
@@ -60,6 +61,7 @@ def load_runtime(settings: Settings | None = None) -> dict[str, Any]:
     out["code_gguf"] = _normalize_name(out.get("code_gguf")) or DEFAULT_RUNTIME["code_gguf"]
     # keep legacy field in sync for old readers
     out["chat_model_id"] = out["chat_gguf"]
+    out["soft_evolve_from_dialogue"] = bool(out.get("soft_evolve_from_dialogue"))
     return out
 
 
@@ -83,6 +85,8 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current["vision_gguf"] = _normalize_name(patch["vision_gguf"])
     if "vision_mmproj" in patch and patch["vision_mmproj"] is not None:
         current["vision_mmproj"] = _normalize_name(patch["vision_mmproj"])
+    if "soft_evolve_from_dialogue" in patch and patch["soft_evolve_from_dialogue"] is not None:
+        current["soft_evolve_from_dialogue"] = bool(patch["soft_evolve_from_dialogue"])
 
     # legacy API: chat_model_id как id или filename
     if "chat_model_id" in patch and patch["chat_model_id"] is not None:
@@ -92,6 +96,9 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
     current["chat_model_id"] = current["chat_gguf"]
     current["vision_gguf"] = _normalize_name(current.get("vision_gguf")) or ""
     current["vision_mmproj"] = _normalize_name(current.get("vision_mmproj")) or ""
+    current["soft_evolve_from_dialogue"] = bool(
+        current.get("soft_evolve_from_dialogue")
+    )
     path = _runtime_path(settings)
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return current

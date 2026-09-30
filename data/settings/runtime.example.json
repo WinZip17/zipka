@@ -4,5 +4,6 @@
   "chat_gguf": "Pathfinder-RP-12B-RU.Q4_K_M.gguf",
   "code_gguf": "Qwen2.5-7B-Instruct-Q5_K_M.gguf",
   "vision_gguf": "",
-  "vision_mmproj": ""
+  "vision_mmproj": "",
+  "soft_evolve_from_dialogue": false
 }

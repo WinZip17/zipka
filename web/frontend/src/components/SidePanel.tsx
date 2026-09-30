@@ -24,6 +24,7 @@ import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Slider from "@mui/material/Slider";
 import Stack from "@mui/material/Stack";
+import Switch from "@mui/material/Switch";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
@@ -50,6 +51,7 @@ import {
   setCompute,
   setModels,
   setNewsSchedule,
+  setSoftEvolveDialogue,
   startFinetune,
   type FinetuneStatusResponse,
   type NewsIntervalOption,
@@ -198,6 +200,9 @@ export function SidePanel({
   const [codeGguf, setCodeGguf] = useState("");
   const [modelsBusy, setModelsBusy] = useState(false);
   const [modelsMsg, setModelsMsg] = useState<string | null>(null);
+  const [softDialogue, setSoftDialogue] = useState(false);
+  const [softDialogueBusy, setSoftDialogueBusy] = useState(false);
+  const [softDialogueMsg, setSoftDialogueMsg] = useState<string | null>(null);
   const [finetuneBusy, setFinetuneBusy] = useState(false);
   const [finetuneMsg, setFinetuneMsg] = useState<string | null>(null);
   const [finetuneInfo, setFinetuneInfo] = useState<FinetuneStatusResponse | null>(
@@ -259,6 +264,12 @@ export function SidePanel({
     if (m === "cpu" || m === "gpu" || m === "hybrid") setComputeMode(m);
     if (typeof c.gpu_layers === "number") setGpuLayers(c.gpu_layers);
   }, [status?.compute]);
+
+  useEffect(() => {
+    if (typeof status?.soft_evolve_from_dialogue === "boolean") {
+      setSoftDialogue(status.soft_evolve_from_dialogue);
+    }
+  }, [status?.soft_evolve_from_dialogue]);
 
   useEffect(() => {
     const roles = status?.chat_models || status?.model_roles;
@@ -573,6 +584,27 @@ export function SidePanel({
       setComputeMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setComputeBusy(false);
+    }
+  };
+
+  const applySoftDialogue = async (enabled: boolean) => {
+    setSoftDialogueBusy(true);
+    setSoftDialogueMsg(null);
+    setSoftDialogue(enabled);
+    try {
+      const data = await setSoftEvolveDialogue(enabled);
+      setSoftDialogue(Boolean(data.soft_evolve_from_dialogue));
+      setSoftDialogueMsg(
+        data.soft_evolve_from_dialogue
+          ? "Soft-evolve из диалога включён (предложения ждут «запомни это»)."
+          : "Soft-evolve из диалога выключен.",
+      );
+      onRefresh();
+    } catch (err) {
+      setSoftDialogue(!enabled);
+      setSoftDialogueMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSoftDialogueBusy(false);
     }
   };
 
@@ -1505,6 +1537,48 @@ export function SidePanel({
               >
                 {computeBusy ? "Применяю…" : "Применить compute"}
               </Button>
+
+              <Typography
+                variant="subtitle2"
+                color="text.secondary"
+                sx={{ mt: 2, mb: 1, fontWeight: 700 }}
+              >
+                Soft-evolve
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={softDialogue}
+                    disabled={busy || softDialogueBusy || finetuneRunning}
+                    onChange={(_e, checked) => void applySoftDialogue(checked)}
+                  />
+                }
+                label="Учиться из диалога"
+                sx={{ mb: 0.5, ml: 0 }}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mb: 1 }}
+              >
+                Фоном предлагает правки характера/навыков. Без авто-применения:
+                подтверди фразой «запомни это» или отклони «не запоминай».
+              </Typography>
+              {status?.pending_soft ? (
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  Есть предложение soft-evolve. Approve: «
+                  {status.soft_approve_phrase || "запомни это"}».
+                </Alert>
+              ) : null}
+              {softDialogueMsg && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+                >
+                  {softDialogueMsg}
+                </Typography>
+              )}
               <Accordion
                 disableGutters
                 elevation={0}

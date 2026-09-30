@@ -145,7 +145,18 @@ def handle_llm_reply(agent: Any, ctx: ChatCtx) -> str | None:
             reply += f"\n\n[soft-evolve] {result.get('reason') or 'обновилась'}"
         except Exception:
             pass
-    agent._schedule_post_chat(text, reply, reflect=do_reflect, observe=True)
+    try:
+        offer = agent.soft.pending_offer_once()
+        reply = agent.proactive.attach(reply, offer)
+    except Exception:
+        pass
+    agent._schedule_post_chat(
+        text,
+        reply,
+        reflect=do_reflect,
+        observe=True,
+        soft_dialogue=not do_soft,
+    )
     return reply
 
 
@@ -156,8 +167,11 @@ PIPELINE: list[Handler] = [
     handle_news,
     handle_book_read,
     handle_look,
+    evolve_handlers.handle_soft_approve,
+    evolve_handlers.handle_soft_decline,
     evolve_handlers.handle_finetune_approve,
     evolve_handlers.handle_hard_approve,
+    evolve_handlers.handle_soft_pending_hint,
     evolve_handlers.handle_finetune_pending_hint,
     evolve_handlers.handle_hard_pending_hint,
     evolve_handlers.handle_finetune_propose,

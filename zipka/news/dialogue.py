@@ -235,16 +235,22 @@ def match_specific_item(
 
 
 def _context_block(desk: NewsDesk, items: list[dict[str, Any]]) -> str:
+    from zipka.news.reader import sanitize_news_summary
+
     lines: list[str] = []
     for i, h in enumerate(items, 1):
         when = (h.get("published_at") or h.get("fetched_at") or "")[:16]
         src = h.get("source") or ""
         title = h.get("title") or "Без заголовка"
-        summary = (h.get("summary") or h.get("text") or "")[:420]
+        body = str(h.get("text") or "")
+        summary = sanitize_news_summary(
+            str(h.get("summary") or ""),
+            fallback=body[:420] if body else title,
+        )
         url = desk.item_source_url(h)
         lines.append(f"{i}. [{when}] {src}: {title}")
-        if summary:
-            lines.append(f"   {summary}")
+        if summary and summary.strip() != str(title).strip():
+            lines.append(f"   {summary[:420]}")
         if url:
             lines.append(f"   URL: {url}")
     return "\n".join(lines) if lines else "(пусто)"

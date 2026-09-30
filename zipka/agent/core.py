@@ -38,7 +38,9 @@ class Zipka:
         self.llm = create_llm_client(self.settings)
         self.memory = MemoryStore(self.settings)
         self.persona = Persona(self.settings)
-        self.soft = SoftEvolve(self.persona, self.memory, self.llm)
+        self.soft = SoftEvolve(
+            self.persona, self.memory, self.llm, settings=self.settings
+        )
         self.hard = HardEvolve(self._code_llm(), self.memory, self.settings)
         self.finetune = FinetuneEvolve(self.memory, self.settings)
         self.books = BookReader(self.llm, self.memory, self.settings)
@@ -108,6 +110,9 @@ class Zipka:
     ) -> dict[str, Any]:
         return runtime.set_models(self, chat_gguf=chat_gguf, code_gguf=code_gguf)
 
+    def set_soft_evolve_from_dialogue(self, enabled: bool) -> dict[str, Any]:
+        return runtime.set_soft_evolve_from_dialogue(self, enabled)
+
     # --- prompting / chat ---
 
     def build_messages(
@@ -170,6 +175,7 @@ class Zipka:
         *,
         reflect: bool,
         observe: bool,
+        soft_dialogue: bool = True,
     ) -> None:
         def _job() -> None:
             try:
@@ -182,6 +188,11 @@ class Zipka:
                         self.user._turn_alert = None
                 elif self.user._turn_alert is not None:
                     self.user._turn_alert = None
+                if soft_dialogue:
+                    try:
+                        self.soft.maybe_propose_from_dialogue(user_text, reply)
+                    except Exception:
+                        pass
                 if reflect:
                     try:
                         self.mind.reflect()
