@@ -9,6 +9,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from zipka.agent import Zipka
+from zipka.books.reader import DEFAULT_MAX_FILES
 from zipka.config import ensure_data_dirs, get_settings
 from zipka.evolve.hard import APPROVE_PHRASE
 from zipka.mind.goals import normalize_goals
@@ -137,7 +138,9 @@ def read(
     mode: Optional[str] = typer.Option(
         None, "--mode", help="auto|books|code — фильтр содержимого папки"
     ),
-    max_files: int = typer.Option(24, "--max-files", help="Лимит файлов в папке"),
+    max_files: int = typer.Option(
+        DEFAULT_MAX_FILES, "--max-files", help="Лимит файлов в папке"
+    ),
     edits: bool = typer.Option(
         False, "--edits", help="После изучения проекта предложить правки"
     ),

@@ -95,6 +95,10 @@ ARCHIVE_SUFFIXES = {".zip", ".rar"}
 EXTRA_CONTEXT_SUFFIXES = {".mdc", ".mdx"}
 READABLE_SUFFIXES = BOOK_SUFFIXES | CODE_SUFFIXES | EXTRA_CONTEXT_SUFFIXES
 
+# Сколько файлов брать при изучении папки (чат может переопределить фразой).
+DEFAULT_MAX_FILES = 24
+MAX_FILES_HARD_CAP = 80
+
 SKIP_DIR_NAMES = {
     ".git",
     ".hg",
@@ -233,7 +237,7 @@ class BookReader:
         *,
         max_chunks: int = 6,
         member: str | None = None,
-        max_files: int = 24,
+        max_files: int = DEFAULT_MAX_FILES,
         comment: str | None = None,
         mode: str | None = None,
     ) -> dict:

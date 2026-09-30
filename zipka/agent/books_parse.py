@@ -4,7 +4,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from zipka.books.reader import ARCHIVE_SUFFIXES, READABLE_SUFFIXES
+from zipka.books.reader import (
+    ARCHIVE_SUFFIXES,
+    DEFAULT_MAX_FILES,
+    MAX_FILES_HARD_CAP,
+    READABLE_SUFFIXES,
+)
 
 _FILE_EXTS = "|".join(
     re.escape(ext.lstrip(".")) for ext in sorted(READABLE_SUFFIXES | ARCHIVE_SUFFIXES)
@@ -64,8 +69,16 @@ EDITS_RE = re.compile(
     r"(предложи\s+правк|с\s+правкам|и\s+правк|propose\s+edits|--edits)",
     re.IGNORECASE,
 )
+# «файлов 40», «40 файлов», «max=40», «лимит 16», «--max-files 32»
 MAX_FILES_RE = re.compile(
-    r"(?:макс(?:имум)?|max(?:[_-]?files)?|файлов)\s*[=:]?\s*(?P<n>\d+)",
+    r"(?:"
+    r"--max[_-]?files\s*[=:]?\s*(?P<n1>\d+)"
+    r"|(?:макс(?:имум)?(?:\s+файл\w*)?|max(?:[_-]?files)?|лимит(?:\s+файл\w*)?)"
+    r"\s*[=:]?\s*(?P<n2>\d+)"
+    r"|(?:возьми|бери)\s+(?P<n3>\d+)\s+файл"
+    r"|(?P<n4>\d+)\s*файл(?:ов|а|ы)?"
+    r"|файл(?:ов|а|ы)?\s*[=:]?\s*(?P<n5>\d+)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -125,14 +138,22 @@ def extract_mode(text: str) -> str | None:
 
 
 def extract_max_files(text: str) -> int | None:
-    match = MAX_FILES_RE.search(text)
+    """Лимит файлов при изучении папки; None → дефолт DEFAULT_MAX_FILES."""
+    match = MAX_FILES_RE.search(text or "")
     if not match:
         return None
+    raw = (
+        match.group("n1")
+        or match.group("n2")
+        or match.group("n3")
+        or match.group("n4")
+        or match.group("n5")
+    )
     try:
-        n = int(match.group("n"))
-    except ValueError:
+        n = int(raw)
+    except (TypeError, ValueError):
         return None
-    return max(1, min(n, 80))
+    return max(1, min(n, MAX_FILES_HARD_CAP))
 
 
 def extract_book_path(text: str) -> Path | None:

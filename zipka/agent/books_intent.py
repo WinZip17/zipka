@@ -8,6 +8,7 @@ from typing import Any
 from zipka.books.reader import ARCHIVE_SUFFIXES, READABLE_SUFFIXES
 
 from .books_parse import (
+    DEFAULT_MAX_FILES,
     EDITS_RE,
     LIST_INTENT,
     MEMBER_RE,
@@ -21,6 +22,7 @@ from .books_parse import (
 
 # re-export for Zipka thin wrappers / tests
 __all__ = [
+    "DEFAULT_MAX_FILES",
     "extract_book_path",
     "extract_comment",
     "extract_max_files",
@@ -28,6 +30,7 @@ __all__ = [
     "ingest_uploaded_book",
     "try_read_from_message",
     "try_read_url_from_message",
+    "wants_opinion",
 ]
 
 
@@ -142,7 +145,8 @@ def try_read_from_message(agent: Any, text: str) -> str | None:
             flags=re.IGNORECASE,
         )[0].strip() or None
     mode = extract_mode(text)
-    max_files = extract_max_files(text)
+    requested_max = extract_max_files(text)
+    max_files = requested_max if requested_max is not None else DEFAULT_MAX_FILES
     want_edits = bool(EDITS_RE.search(text))
 
     try:
@@ -160,7 +164,7 @@ def try_read_from_message(agent: Any, text: str) -> str | None:
             member=member,
             comment=comment,
             mode=mode,
-            max_files=max_files or 24,
+            max_files=max_files,
         )
         kind = result.get("kind") or "book"
         if path.is_dir() and result.get("is_project"):
@@ -179,10 +183,18 @@ def try_read_from_message(agent: Any, text: str) -> str | None:
         )
         files_line = ""
         if result.get("files"):
+            limit_note = (
+                f"лимит {max_files}"
+                + (
+                    " (задан в запросе)"
+                    if requested_max is not None
+                    else f" (дефолт {DEFAULT_MAX_FILES})"
+                )
+            )
             files_line = (
                 f"Файлов: {len(result['files'])}"
                 f" (книги={result.get('book_count', 0)}, "
-                f"код={result.get('code_count', 0)}).\n"
+                f"код={result.get('code_count', 0)}; {limit_note}).\n"
             )
         strategy = result.get("study_strategy")
         strategy_line = ""
