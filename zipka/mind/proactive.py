@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import threading
 from datetime import date, datetime, timezone
 from typing import Any
@@ -234,11 +235,17 @@ class ProactiveEngine:
         kind: str = "book",
         comment: str | None = None,
     ) -> str | None:
+        from zipka.llm.sanitize import (
+            enforce_addressee_gender,
+            is_degenerate_generation,
+            load_addressee_gender,
+        )
+
         label = (
             "статьи"
             if kind.startswith("url")
             else "кода"
-            if kind.startswith("code")
+            if kind.startswith("code") or kind.startswith("folder")
             else "материала"
         )
         focus = (
@@ -246,13 +253,23 @@ class ProactiveEngine:
             if comment
             else ""
         )
+        gender = load_addressee_gender()
+        gender_hint = ""
+        if gender == "male":
+            gender_hint = (
+                "Собеседник — мужчина: к нему мужской род (ты живой, сделал), "
+                "не женский. О себе — женский род.\n"
+            )
+        elif gender == "female":
+            gender_hint = "Собеседник — женщина: к ней женский род.\n"
         prompt = (
             self._persona_bits()
+            + gender_hint
             + f"Только что изучила {label}: {source}\n"
             f"{focus}"
             f"Выжимка:\n{digest[:2500]}\n\n"
             "Задай 1–2 уточняющих вопроса по сути (что проверить, что непонятно, "
-            "что развить). Коротко, от лица Зипки."
+            "что развить). Коротко, от лица Зипки. Без ХХХХ."
         )
         if not self.llm.is_available():
             text = (
@@ -266,7 +283,85 @@ class ProactiveEngine:
                     {"role": "user", "content": "Уточнения."},
                 ]
             ).strip()
+            if is_degenerate_generation(text):
+                text = (
+                    f"По «{source}» уточни: что для тебя здесь главное "
+                    "и что проверить дальше?"
+                )
+            text = enforce_addressee_gender(text, gender)
         self._log("study_followup", text)
+        return text
+
+    def study_opinion(
+        self,
+        *,
+        source: str,
+        digest: str,
+        kind: str = "book",
+        comment: str | None = None,
+    ) -> str | None:
+        """Мнение по изученному — когда пользователь спросил «что думаешь»."""
+        from zipka.llm.sanitize import (
+            enforce_addressee_gender,
+            is_degenerate_generation,
+            load_addressee_gender,
+        )
+
+        label = (
+            "статью"
+            if kind.startswith("url")
+            else "проект/код"
+            if kind.startswith("code") or kind.startswith("folder")
+            else "материал"
+        )
+        focus = f"\nЗапрос пользователя: {comment}\n" if comment else ""
+        gender = load_addressee_gender()
+        gender_hint = ""
+        if gender == "male":
+            gender_hint = (
+                "Собеседник — мужчина (к нему: ты сделал/живой; о себе Зипка — женский род).\n"
+            )
+        clean_digest = digest or ""
+        if is_degenerate_generation(clean_digest):
+            # выкинуть блоки из одних ХХХ
+            parts = [
+                p
+                for p in re.split(r"\n{2,}", clean_digest)
+                if p.strip() and not is_degenerate_generation(p)
+            ]
+            clean_digest = "\n\n".join(parts)[:3500]
+        prompt = (
+            self._persona_bits()
+            + gender_hint
+            + f"Только что изучила {label}: {source}\n"
+            f"{focus}"
+            f"Выжимка (факты):\n{clean_digest[:3500]}\n\n"
+            "Дай СВОЁ мнение Зипки: 3–6 предложений — что это за штука, "
+            "сильные/слабые стороны, что цепляет или настораживает. "
+            "Не анкета и не список файлов. Можно закончить одним уточняющим вопросом. "
+            "Без ХХХХ и без копирования инструкции."
+        )
+        if not self.llm.is_available():
+            text = (
+                f"По «{source}» пока вижу структуру, но без нормальной выжимки "
+                "глубже не скажу. Напомни, что для тебя в этом проекте главное?"
+            )
+        else:
+            text = self.llm.chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": "Твоё мнение."},
+                ]
+            ).strip()
+            if is_degenerate_generation(text) or not text:
+                text = (
+                    f"По «{source}» факты из выжимки скудные/битые, "
+                    "поэтому мнение осторожное: похоже на рабочий проект, "
+                    "но без нормального обзора не рискну хвалить или ругать. "
+                    "Что для тебя в нём главное — архитектура, UI, данные?"
+                )
+            text = enforce_addressee_gender(text, gender)
+        self._log("study_opinion", text)
         return text
 
     def sensor_comment(self, *, modality: str, content: str) -> str | None:

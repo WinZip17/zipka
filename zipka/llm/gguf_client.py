@@ -352,18 +352,42 @@ class GgufClient:
         return strip_thinking(message.get("content") or "")
 
     def summarize(self, text: str, *, instruction: str) -> str:
+        from zipka.llm.sanitize import is_degenerate_generation
+
+        system = (
+            "Ты технический аналитик и редактор выжимок. "
+            "Отвечай только связным текстом выдержки на русском. "
+            "Запрещены символы-заполнители вроде XXXX/ХХХХ и повтор одного символа. "
+            "Не обращайся к пользователю, не задавай вопросов, не цитируй инструкцию, "
+            "не пиши «я Зипка» и не добавляй служебные реплики."
+        )
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Ты новостной редактор. Отвечай только текстом выдержки на русском. "
-                    "Не обращайся к пользователю, не задавай вопросов, не цитируй инструкцию, "
-                    "не пиши «я Зипка» и не добавляй служебные реплики."
-                ),
-            },
+            {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": f"{instruction}\n\n---\n{text[:8000]}",
             },
         ]
-        return self.chat(messages, max_tokens=1024)
+        out = self.chat(messages, max_tokens=1024)
+        if not is_degenerate_generation(out):
+            return out
+        # один повтор с жёстким запретом мусора
+        retry = [
+            {
+                "role": "system",
+                "content": system
+                + " Если нечего сказать — напиши одно короткое предложение по фактам текста.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"{instruction}\n\n"
+                    "Важно: обычные русские слова, без ХХХХ и без копирования инструкции.\n\n"
+                    f"---\n{text[:6000]}"
+                ),
+            },
+        ]
+        out2 = self.chat(retry, max_tokens=768)
+        if not is_degenerate_generation(out2):
+            return out2
+        return ""

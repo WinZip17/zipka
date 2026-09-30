@@ -44,6 +44,18 @@ COMMENT_RE = re.compile(
     r"(?:комментарий|учти|с\s+комментарием|фокус|note|comment)\s*[:\-–—]\s*(?P<c>.+)$",
     re.IGNORECASE | re.DOTALL,
 )
+OPINION_RE = re.compile(
+    r"(?:"
+    r"что\s+(?:ты\s+)?(?:о\s+(?:н[её]м|ней|этом|этой|данном?\w*)\s+)?"
+    r"(?:проект\w*|папк\w*|код\w*|репо\w*|архив\w*)?\s*думаешь|"
+    r"что\s+(?:ты\s+)?думаешь|"
+    r"тво[её]\s+мнение|"
+    r"как\s+(?:тебе|оцен\w*)|"
+    r"оцен\w*\s+(?:проект|папк|код|репо)|"
+    r"впечатлени\w*"
+    r")",
+    re.IGNORECASE,
+)
 MODE_RE = re.compile(
     r"(?:mode|режим|только)\s*[:\s]+(?P<m>books?|code|код|книг\w*|auto|вс[её])",
     re.IGNORECASE,
@@ -59,11 +71,45 @@ MAX_FILES_RE = re.compile(
 
 
 def extract_comment(text: str) -> str | None:
-    match = COMMENT_RE.search(text)
-    if not match:
+    """Явный «комментарий: …» или свободный хвост после пути («…, что думаешь?»)."""
+    match = COMMENT_RE.search(text or "")
+    if match:
+        comment = match.group("c").strip().strip("\"'")
+        return comment or None
+
+    scrubbed = re.sub(
+        r"https?://[^\s<>\"')\]]+",
+        " ",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    # вырезать путь к файлу/папке
+    scrubbed = PATH_RE.sub(" ", scrubbed)
+    scrubbed = DIR_PATH_RE.sub(" ", scrubbed)
+    # вырезать служебные куски
+    scrubbed = MEMBER_RE.sub(" ", scrubbed)
+    scrubbed = MODE_RE.sub(" ", scrubbed)
+    scrubbed = MAX_FILES_RE.sub(" ", scrubbed)
+    scrubbed = EDITS_RE.sub(" ", scrubbed)
+    scrubbed = READ_INTENT.sub(" ", scrubbed)
+    scrubbed = LIST_INTENT.sub(" ", scrubbed)
+    scrubbed = re.sub(
+        r"\b(?:проект|папк\w*|репозитори\w*|репо|код|книг\w*|архив\w*)\b",
+        " ",
+        scrubbed,
+        flags=re.IGNORECASE,
+    )
+    scrubbed = re.sub(r"\s+", " ", scrubbed).strip(" \t\r\n\"'.,;:!?—–-")
+    if len(scrubbed) < 3:
         return None
-    comment = match.group("c").strip().strip("\"'")
-    return comment or None
+    # слишком общее («пожалуйста») — не фокус
+    if scrubbed.lower() in {"пожалуйста", "pls", "please", "спасибо"}:
+        return None
+    return scrubbed
+
+
+def wants_opinion(text: str) -> bool:
+    return bool(OPINION_RE.search(text or ""))
 
 
 def extract_mode(text: str) -> str | None:

@@ -14,6 +14,7 @@ DEFAULT_PROFILE: dict[str, Any] = {
         "name": "",
         "aliases": [],
         "how_to_address": "",
+        "gender": "",
         "notes": "",
     },
     "character": [],
@@ -206,7 +207,7 @@ class UserProfiler:
             ident = patch.get("identity")
             if isinstance(ident, dict):
                 cur = profile.setdefault("identity", {})
-                for k in ("name", "how_to_address", "notes"):
+                for k in ("name", "how_to_address", "gender", "notes"):
                     if ident.get(k):
                         cur[k] = str(ident[k]).strip()
                 if ident.get("aliases") is not None:
@@ -812,7 +813,7 @@ class UserProfiler:
             "{\n"
             '  "apply": true|false,\n'
             '  "reason": "кратко что узнали",\n'
-            '  "identity": {"name": "", "aliases": [], "how_to_address": "", "notes": ""},\n'
+            '  "identity": {"name": "", "aliases": [], "how_to_address": "", "gender": "male|female|", "notes": ""},\n'
             '  "character": ["черты характера"],\n'
             '  "personality_type": "свободное описание типа личности",\n'
             '  "peculiarities": ["особенности общения, привычки, стиль"],\n'
@@ -827,6 +828,7 @@ class UserProfiler:
             "Правила: apply=false если ничего нового; не выдумывай; "
             "дописывай только то, что следует из диалога; списки — короткие фразы. "
             "Если человек назвал своё имя — обязательно identity.name. "
+            "Если пол ясен (мужское/женское имя или сам сказал) — identity.gender: male|female. "
             "Если представили другого человека из круга Зипки — добавь в inner_circle "
             "(role=trusted), не подменяя основного.\n"
             f"ТЕКУЩИЙ ПРОФИЛЬ:\n{json.dumps(current, ensure_ascii=False)}\n\n"
@@ -893,11 +895,23 @@ class UserProfiler:
         ident = p.get("identity") or {}
         name = ident.get("name") or ""
         address = ident.get("how_to_address") or ""
+        gender = str(ident.get("gender") or "").strip().lower()
         if name or address:
             bit = name or "без имени"
             if address:
                 bit += f", обращайся: {address}"
             lines.append(f"- Кто: {bit}")
+        if gender in {"male", "m", "муж", "мужской", "man"}:
+            lines.append(
+                "- Пол собеседника: мужской. К нему ТОЛЬКО мужской род "
+                "(ты живой, сделал, готов, уверен) — НИКОГДА «ты живая/сделала/готова». "
+                "Женский род оставляй только о себе (Зипка)."
+            )
+        elif gender in {"female", "f", "жен", "женский", "woman"}:
+            lines.append(
+                "- Пол собеседника: женский. К ней женский род "
+                "(ты живая, сделала, готова). О себе (Зипка) — тоже женский род."
+            )
         if ident.get("notes"):
             lines.append(f"- Заметки об имени/роли: {ident['notes']}")
         if ident.get("aliases"):
@@ -1051,6 +1065,7 @@ class UserProfiler:
         return {
             "name": ident.get("name") or "",
             "how_to_address": ident.get("how_to_address") or "",
+            "gender": ident.get("gender") or "",
             "personality_type": p.get("personality_type") or "",
             "character": list(p.get("character") or [])[:12],
             "peculiarities": list(p.get("peculiarities") or [])[:12],

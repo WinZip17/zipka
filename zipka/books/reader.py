@@ -329,18 +329,42 @@ class BookReader:
             "rest": "AI-контекста не нашлось — обзор прочих исходников/книг",
             "books": "режим книг",
         }.get(strategy, strategy)
+        from zipka.llm.sanitize import is_degenerate_generation
+
+        # в обзор — только нормальные куски, иначе модель срывается в ХХХХ
+        overview_src_parts = [
+            p for p in digests if p.strip() and not is_degenerate_generation(p)
+        ]
+        overview_src = "\n\n".join(overview_src_parts)[:14000]
+        if not overview_src.strip():
+            overview_src = "\n".join(
+                f"- {fp.relative_to(directory).as_posix()}" for fp in files
+            )
         try:
             overview = self.llm.summarize(
-                digest[:14000],
+                overview_src,
                 instruction=(
                     f"Сделай обзор папки «{directory.name}» ({folder_kind}): "
                     f"книг={book_n}, кода={code_n}. Стратегия: {strategy_hint}. "
-                    "Структура, назначение, главные темы/модули, на что обратить внимание."
+                    "Структура, назначение, главные темы/модули, на что обратить внимание. "
+                    "Пиши обычным русским текстом, без ХХХХ."
                     + (f" Фокус пользователя: {comment}" if comment else "")
                 ),
             )
+            if overview and is_degenerate_generation(overview):
+                overview = ""
         except Exception:
             overview = ""
+        if not overview:
+            names = ", ".join(
+                fp.relative_to(directory).as_posix() for fp in files[:12]
+            )
+            more = f" и ещё {len(files) - 12}" if len(files) > 12 else ""
+            overview = (
+                f"Папка «{directory.name}»: {folder_kind}, "
+                f"файлов в обзоре {len(files)} (книги={book_n}, код={code_n}). "
+                f"Ключевые пути: {names}{more}."
+            )
 
         out = self.notes_dir / f"{directory.name}_dir_digest.md"
         header = (
@@ -422,13 +446,23 @@ class BookReader:
         # Код: несколько коротких проходов, но не больше 3 (было 6 — слишком медленно)
         chunks = self._chunk(text, size=3500)[: max(1, min(int(max_chunks), 3))]
         summaries: list[str] = []
+        from zipka.llm.sanitize import is_degenerate_generation
+
         for i, chunk in enumerate(chunks, 1):
             instruction = self._instruction(
                 kind, source_label, i, len(chunks), comment=comment
             )
             summary = self.llm.summarize(chunk, instruction=instruction)
+            if not summary or is_degenerate_generation(summary):
+                summary = self._heuristic_snippet(
+                    chunk, source_label=source_label, kind=kind
+                )
             summaries.append(summary)
-        digest = "\n\n".join(summaries)
+        digest = "\n\n".join(s for s in summaries if s.strip())
+        if not digest.strip():
+            digest = self._heuristic_snippet(
+                text[:8000], source_label=source_label, kind=kind
+            )
         # одна заметка, а не по куску — иначе раздувается system prompt
         self.memory.add_note(
             kind,
@@ -477,6 +511,12 @@ class BookReader:
             f"{focus}"
         )
         digest = self.llm.summarize(sample, instruction=instruction)
+        from zipka.llm.sanitize import is_degenerate_generation
+
+        if not digest or is_degenerate_generation(digest):
+            digest = self._heuristic_snippet(
+                sample, source_label=source_label, kind="book"
+            )
         self.memory.add_note(
             "book",
             digest[:1800],
@@ -1024,6 +1064,42 @@ class BookReader:
             return re.sub(r"\s+", " ", rough)[:max_chars].strip()
         text = "\n".join(p for p in parts if p)
         return text[:max_chars]
+
+    @staticmethod
+    def _heuristic_snippet(
+        text: str,
+        *,
+        source_label: str,
+        kind: str,
+    ) -> str:
+        """Запасная выжимка без LLM, если модель выдала ХХХХ/пусто."""
+        raw = (text or "").strip()
+        if not raw:
+            return f"«{source_label}»: файл пуст или не прочитан."
+        lines = [ln.rstrip() for ln in raw.splitlines() if ln.strip()]
+        if kind == "code":
+            keys: list[str] = []
+            for ln in lines[:200]:
+                s = ln.strip()
+                if re.match(
+                    r"^(export\s+)?(default\s+)?(async\s+)?(function|class|def|const|type|interface|enum)\b",
+                    s,
+                ) or s.startswith(("@", "public ", "private ", "package ")):
+                    keys.append(s[:160])
+                if len(keys) >= 12:
+                    break
+            head = "\n".join(lines[:18])[:900]
+            bits = [f"Файл `{source_label}` (эвристика без LLM)."]
+            if keys:
+                bits.append("Сигнатуры/объявления:\n- " + "\n- ".join(keys[:10]))
+            if head:
+                bits.append("Начало:\n" + head)
+            return "\n\n".join(bits)
+        # книга / текст
+        preview = "\n".join(lines[:25])[:1200]
+        return (
+            f"«{source_label}» — краткий фрагмент (эвристика без LLM):\n{preview}"
+        )
 
     @staticmethod
     def _chunk(text: str, size: int = 3500) -> list[str]:

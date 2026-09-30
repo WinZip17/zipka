@@ -16,6 +16,7 @@ from .books_parse import (
     extract_comment,
     extract_max_files,
     extract_mode,
+    wants_opinion,
 )
 
 # re-export for Zipka thin wrappers / tests
@@ -70,6 +71,10 @@ def try_read_url_from_message(agent: Any, text: str) -> str | None:
     title = result.get("title") or url
     digest = result.get("digest_path") or "—"
     preview = (result.get("summary") or "")[:2200]
+    from zipka.llm.sanitize import is_degenerate_generation
+
+    if is_degenerate_generation(preview):
+        preview = "(Выжимка статьи не удалась — попробуй ещё раз или открой файл выжимки.)"
     comment_line = f"С учётом комментария: {comment}\n" if comment else ""
     reply = (
         f"Прочитала: {title}\n"
@@ -79,12 +84,23 @@ def try_read_url_from_message(agent: Any, text: str) -> str | None:
         f"{preview}"
     )
     try:
-        follow = agent.proactive.study_followup(
-            source=str(result.get("url")),
-            digest=result.get("summary") or "",
-            kind="url",
-            comment=comment,
+        ask_opinion = wants_opinion(text) or (
+            bool(comment) and wants_opinion(comment)
         )
+        if ask_opinion:
+            follow = agent.proactive.study_opinion(
+                source=str(result.get("url")),
+                digest=result.get("summary") or "",
+                kind="url",
+                comment=comment,
+            )
+        else:
+            follow = agent.proactive.study_followup(
+                source=str(result.get("url")),
+                digest=result.get("summary") or "",
+                kind="url",
+                comment=comment,
+            )
         reply = agent.proactive.attach(reply, follow)
     except Exception:
         pass
@@ -185,6 +201,13 @@ def try_read_from_message(agent: Any, text: str) -> str | None:
         digest_preview = (result.get("overview") or result.get("digest") or "")[
             :1200
         ]
+        from zipka.llm.sanitize import is_degenerate_generation
+
+        if is_degenerate_generation(digest_preview):
+            digest_preview = (
+                "(Выжимка частично не удалась — модель выдала мусор. "
+                f"Смотри файл `{result.get('digest_path')}` или попроси пересказ.)"
+            )
         reply = (
             f"{verb}{inner}: `{path}`\n"
             f"{comment_line}"
@@ -195,12 +218,23 @@ def try_read_from_message(agent: Any, text: str) -> str | None:
             f"{digest_preview}"
         )
         try:
-            follow = agent.proactive.study_followup(
-                source=str(path),
-                digest=result.get("digest") or "",
-                kind=kind,
-                comment=comment,
+            ask_opinion = wants_opinion(text) or (
+                bool(comment) and wants_opinion(comment)
             )
+            if ask_opinion:
+                follow = agent.proactive.study_opinion(
+                    source=str(path),
+                    digest=result.get("digest") or result.get("overview") or "",
+                    kind=kind,
+                    comment=comment,
+                )
+            else:
+                follow = agent.proactive.study_followup(
+                    source=str(path),
+                    digest=result.get("digest") or "",
+                    kind=kind,
+                    comment=comment,
+                )
             reply = agent.proactive.attach(reply, follow)
         except Exception:
             pass
