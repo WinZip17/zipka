@@ -21,6 +21,7 @@
 zipka/
   PROJECT_MAP.md
   README.md
+  LICENSE            # MIT
   requirements.txt
   pyproject.toml
   .env.example
