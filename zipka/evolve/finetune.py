@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -34,6 +35,14 @@ APPROVE_PHRASES = {
     APPROVE_PHRASE,
     "разрешаю дообучить",
     "разрешаю сохранить в модель",
+}
+
+RESET_CONFIRM_PHRASE = "подтверждаю сброс дообучения"
+RESET_CONFIRM_PHRASES = {
+    RESET_CONFIRM_PHRASE,
+    "подтверждаю сброс дообучения.",
+    "confirm reset finetune",
+    "confirm finetune reset",
 }
 
 # Подстрока имени GGUF → HF base для первого поколения
@@ -192,6 +201,10 @@ class FinetuneEvolve:
     @staticmethod
     def is_approve(text: str) -> bool:
         return text.strip().lower() in APPROVE_PHRASES
+
+    @staticmethod
+    def is_reset_confirm(text: str) -> bool:
+        return text.strip().lower() in RESET_CONFIRM_PHRASES
 
     @staticmethod
     def wants_finetune(text: str) -> bool:
@@ -949,3 +962,132 @@ class FinetuneEvolve:
                 pid=pid,
                 killed=killed,
             )
+
+    def resolve_base_chat_gguf(self) -> str:
+        """GGUF до первого self-дообучения (из lineage.history[].base.gguf)."""
+        from zipka.runtime_settings import DEFAULT_RUNTIME
+
+        lineage = self.load_lineage()
+        history = lineage.get("history") or []
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            base = entry.get("base") or {}
+            if not isinstance(base, dict):
+                continue
+            name = Path(str(base.get("gguf") or "")).name.strip()
+            if not name:
+                continue
+            low = name.lower()
+            if low.startswith("zipka-self"):
+                continue
+            return name
+        return str(DEFAULT_RUNTIME.get("chat_gguf") or "Pathfinder-RP-12B-RU.Q4_K_M.gguf")
+
+    def reset_finetune(self, *, confirm_phrase: str) -> dict[str, Any]:
+        """Сброс артефактов дообучения: начать заново с базовой GGUF.
+
+        Не трогает чат/persona/memory и кэш HuggingFace.
+        """
+        if not self.is_reset_confirm(confirm_phrase):
+            raise PermissionError(
+                f"Нужна точная фраза: «{RESET_CONFIRM_PHRASE}»."
+            )
+
+        st = self.refresh_job_status()
+        if st.get("state") == "running":
+            raise RuntimeError(
+                "Дообучение сейчас running — сначала «Сбросить / прервать» "
+                "или дождись окончания."
+            )
+
+        removed: list[str] = []
+        errors: list[str] = []
+        base_gguf = self.resolve_base_chat_gguf()
+        override = str(self.load_lineage().get("override_hf_base") or "").strip()
+
+        # 1) zipka-self*.gguf (+ случайные .f16 промежуточные)
+        models_dir = self.settings.data_dir / "models"
+        if models_dir.is_dir():
+            for path in sorted(models_dir.iterdir()):
+                if not path.is_file():
+                    continue
+                name = path.name.lower()
+                if name.startswith("zipka-self") and (
+                    name.endswith(".gguf") or ".gguf." in name
+                ):
+                    try:
+                        path.unlink()
+                        removed.append(str(path))
+                    except OSError as exc:
+                        errors.append(f"{path}: {exc}")
+
+        # 2) временные каталоги finetune
+        for sub in ("adapters", "checkpoints", "datasets", "jobs"):
+            folder = self.root / sub
+            if not folder.exists():
+                folder.mkdir(parents=True, exist_ok=True)
+                continue
+            try:
+                shutil.rmtree(folder)
+                folder.mkdir(parents=True, exist_ok=True)
+                removed.append(str(folder) + "/")
+            except OSError as exc:
+                errors.append(f"{folder}: {exc}")
+
+        for fname in ("pending.json", "status.json"):
+            path = self.root / fname
+            if path.is_file():
+                try:
+                    path.unlink()
+                    removed.append(str(path))
+                except OSError as exc:
+                    errors.append(f"{path}: {exc}")
+
+        # 3) lineage: пустой каркас, сохранить override_hf_base
+        fresh = {
+            "generation": 0,
+            "override_hf_base": override,
+            "history": [],
+            "active_checkpoint": "",
+            "active_gguf": "",
+        }
+        self.save_lineage(fresh)
+
+        # 4) вернуть chat_gguf на базовую
+        save_runtime({"chat_gguf": base_gguf}, self.settings)
+        models_path = self.settings.data_dir / "models" / base_gguf
+        base_exists = models_path.is_file()
+
+        self.memory.log_evolve(
+            "finetune_reset",
+            {
+                "base_gguf": base_gguf,
+                "removed": len(removed),
+                "errors": errors[:10],
+            },
+        )
+
+        message = (
+            f"Дообучение сброшено. Чат → `{base_gguf}`. "
+            f"Удалено путей: {len(removed)}."
+        )
+        if not base_exists:
+            message += (
+                f" Файла `{base_gguf}` нет в data/models — положи GGUF "
+                "или выбери модель в Настройках."
+            )
+        if errors:
+            message += f" Ошибки: {len(errors)}."
+
+        return {
+            "ok": not errors,
+            "message": message,
+            "base_gguf": base_gguf,
+            "base_exists": base_exists,
+            "override_hf_base": override,
+            "removed": removed,
+            "errors": errors,
+            "confirm_phrase": RESET_CONFIRM_PHRASE,
+            "lineage": self.load_lineage(),
+        }

@@ -8,6 +8,7 @@ from zipka.books.reader import BookReader
 from zipka.character.persona import Persona
 from zipka.config import ensure_data_dirs
 from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
+from zipka.evolve.finetune import RESET_CONFIRM_PHRASE as FINETUNE_RESET_PHRASE
 from zipka.evolve.finetune import FinetuneEvolve
 from zipka.evolve.hard import APPROVE_PHRASE, HardEvolve
 from zipka.evolve.soft import APPROVE_PHRASE as SOFT_APPROVE_PHRASE
@@ -115,6 +116,15 @@ def reset_learning(agent: Any, *, confirm: bool = False) -> dict[str, Any]:
     return result
 
 
+def reset_finetune(agent: Any, *, confirm_phrase: str) -> dict[str, Any]:
+    """Сброс только дообучения; перезагрузить chat GGUF на базовую."""
+    result = agent.finetune.reset_finetune(confirm_phrase=confirm_phrase)
+    reloaded = reload_llm(agent)
+    result["llm"] = reloaded.get("llm")
+    result["chat_models"] = reloaded.get("chat_models")
+    return result
+
+
 def status(agent: Any) -> dict[str, Any]:
     from zipka.system_limits import available_ram_bytes, format_bytes, max_book_bytes
 
@@ -152,6 +162,7 @@ def status(agent: Any) -> dict[str, Any]:
         "soft_evolve_from_dialogue": agent.soft.dialogue_enabled(),
         "pending_finetune": agent.finetune.has_pending(),
         "finetune_approve_phrase": FINETUNE_APPROVE_PHRASE,
+        "finetune_reset_phrase": FINETUNE_RESET_PHRASE,
         "finetune": agent.finetune.refresh_job_status(),
         "finetune_lineage": {
             "generation": agent.finetune.load_lineage().get("generation"),

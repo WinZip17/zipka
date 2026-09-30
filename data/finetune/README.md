@@ -12,3 +12,8 @@
 | `checkpoints/gen_N/` | HF после merge (~15 ГБ на 8B) | нет |
 
 Экспорт GGUF лежит в `data/models/` (тоже игнорируется).
+
+Сброс «с нуля» (UI / API): удаляет adapters/checkpoints/datasets/jobs,
+pending/status, `zipka-self*.gguf`, обнуляет lineage (сохраняет
+`override_hf_base`), возвращает `chat_gguf` на базовую модель из history.
+Кэш HuggingFace и чат/persona не трогает.

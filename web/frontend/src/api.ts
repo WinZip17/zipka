@@ -152,6 +152,7 @@ export type StatusResponse = {
   model_roles?: ChatModelsStatus;
   pending_finetune?: boolean;
   finetune_approve_phrase?: string;
+  finetune_reset_phrase?: string;
   pending_soft?: boolean;
   soft_approve_phrase?: string;
   soft_evolve_from_dialogue?: boolean;
@@ -488,6 +489,8 @@ export type FinetuneStatusResponse = {
     history?: unknown[];
   };
   approve_phrase?: string;
+  reset_phrase?: string;
+  base_gguf?: string;
 };
 
 export async function fetchFinetuneStatus(): Promise<FinetuneStatusResponse> {
@@ -541,6 +544,33 @@ export async function abortFinetune() {
   if (!res.ok) {
     throw new Error(
       typeof data.detail === "string" ? data.detail : "Не удалось сбросить дообучение",
+    );
+  }
+  return data;
+}
+
+export async function finetuneResetInfo() {
+  const res = await fetch("/api/finetune/reset-info");
+  return parseJson<{ confirm_phrase?: string; base_gguf?: string }>(res);
+}
+
+export async function resetFinetune(confirm_phrase: string) {
+  const res = await fetch("/api/finetune/reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm_phrase }),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    message?: string;
+    base_gguf?: string;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === "string"
+        ? data.detail
+        : "Не удалось сбросить дообучение",
     );
   }
   return data;

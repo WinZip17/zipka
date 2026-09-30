@@ -85,6 +85,9 @@ class Zipka:
     def reset_learning(self, *, confirm: bool = False) -> dict[str, Any]:
         return runtime.reset_learning(self, confirm=confirm)
 
+    def reset_finetune(self, *, confirm_phrase: str) -> dict[str, Any]:
+        return runtime.reset_finetune(self, confirm_phrase=confirm_phrase)
+
     def status(self) -> dict[str, Any]:
         return runtime.status(self)
 

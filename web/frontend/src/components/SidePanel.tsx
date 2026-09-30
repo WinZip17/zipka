@@ -41,9 +41,11 @@ import {
   eyesAction,
   fetchFinetuneStatus,
   fetchNewsSources,
+  finetuneResetInfo,
   ingestNews,
   learn,
   proposeFinetune,
+  resetFinetune,
   resetInfo,
   resetLearning,
   saveNewsSources,
@@ -438,6 +440,45 @@ export function SidePanel({
           ? data.message || "Ошибка сброса"
           : data.message || "Сброшено.",
       );
+      onRefresh();
+    } catch (err) {
+      setFinetuneMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFinetuneBusy(false);
+    }
+  };
+
+  const onResetFinetune = async () => {
+    if (finetuneRunning) return;
+    const info = await finetuneResetInfo();
+    const phrase =
+      info.confirm_phrase ||
+      status?.finetune_reset_phrase ||
+      "подтверждаю сброс дообучения";
+    const base = info.base_gguf || "базовую GGUF";
+    const ok = window.confirm(
+      "Сбросить дообучение и начать заново?\n\n" +
+        "Удалятся: zipka-self*.gguf, adapters/checkpoints/datasets/jobs, " +
+        "pending/status/lineage history.\n" +
+        `Чат вернётся на: ${base}\n` +
+        "Чат, persona, память и кэш HuggingFace НЕ трогаем.\n\n" +
+        "Это необратимо для артефактов дообучения.",
+    );
+    if (!ok) {
+      setFinetuneMsg("Сброс дообучения отменён.");
+      return;
+    }
+    const typed = window.prompt(`Для подтверждения введи фразу:\n${phrase}`, "");
+    if (typed === null) {
+      setFinetuneMsg("Сброс дообучения отменён.");
+      return;
+    }
+    setFinetuneBusy(true);
+    setFinetuneMsg(null);
+    try {
+      const data = await resetFinetune(typed);
+      await refreshFinetune();
+      setFinetuneMsg(data.message || "Дообучение сброшено.");
       onRefresh();
     } catch (err) {
       setFinetuneMsg(err instanceof Error ? err.message : String(err));
@@ -2064,6 +2105,16 @@ export function SidePanel({
                 </Button>
                 <Button
                   fullWidth
+                  variant="outlined"
+                  color="error"
+                  disabled={chatBusy || finetuneBusy || finetuneRunning}
+                  onClick={() => void onResetFinetune()}
+                  sx={{ borderColor: "#8a3a3a", color: "#e8b4b4" }}
+                >
+                  Сбросить дообучение (с нуля)
+                </Button>
+                <Button
+                  fullWidth
                   variant="contained"
                   disabled={
                     busy ||
@@ -2112,7 +2163,10 @@ export function SidePanel({
                     Чат + persona/skills/preferences → LoRA → новый{" "}
                     <code>zipka-self-gen…gguf</code>. Нужно{" "}
                     <code>pip install -e &quot;.[finetune]&quot;</code>, лучше Qwen2.5/Qwen3.
-                    Экспорт GGUF — через llama.cpp.
+                    Экспорт GGUF — через llama.cpp. «Сбросить дообучение (с нуля)»
+                    удаляет self-GGUF и артефакты, возвращает базовую модель из
+                    lineage; чат/память не трогает. Фраза: «подтверждаю сброс
+                    дообучения».
                   </Typography>
                 </AccordionDetails>
               </Accordion>

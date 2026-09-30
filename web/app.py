@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from zipka.agent import Zipka
 from zipka.evolve.hard import APPROVE_PHRASE
 from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
+from zipka.evolve.finetune import RESET_CONFIRM_PHRASE as FINETUNE_RESET_PHRASE
 from zipka.evolve.soft import APPROVE_PHRASE as SOFT_APPROVE_PHRASE
 from zipka.reset import CONFIRM_PHRASE
 from zipka.runtime_settings import compute_status, load_runtime
@@ -424,6 +425,8 @@ def api_finetune_status() -> dict:
         "pending": agent.finetune.load_pending(),
         "lineage": agent.finetune.load_lineage(),
         "approve_phrase": FINETUNE_APPROVE_PHRASE,
+        "reset_phrase": FINETUNE_RESET_PHRASE,
+        "base_gguf": agent.finetune.resolve_base_chat_gguf(),
     }
 
 
@@ -454,6 +457,31 @@ def api_finetune_abort() -> dict:
         return agent.finetune.abort_running(kill=True)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/finetune/reset-info")
+def api_finetune_reset_info() -> dict:
+    return {
+        "confirm_phrase": FINETUNE_RESET_PHRASE,
+        "base_gguf": agent.finetune.resolve_base_chat_gguf(),
+    }
+
+
+@app.post("/api/finetune/reset")
+def api_finetune_reset(body: ResetIn) -> dict:
+    if agent.is_finetune_busy():
+        raise HTTPException(
+            409,
+            "Дообучение running — сначала прерви его («Сбросить / прервать»).",
+        )
+    try:
+        return agent.reset_finetune(confirm_phrase=body.confirm_phrase)
+    except PermissionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось сбросить дообучение: {exc}") from exc
 
 
 class NewsSourcesIn(BaseModel):
