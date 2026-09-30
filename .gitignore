@@ -36,6 +36,7 @@ data/mind/
 data/snapshots/
 data/patches/
 data/books/
+data/news/
 data/persona/persona.yaml
 data/models/*.gguf
 data/models/**/*.gguf
