@@ -83,6 +83,10 @@ export default function App() {
   const hasMoreRef = useRef(false);
   const oldestRef = useRef<number | null>(null);
   const statusRef = useRef<StatusResponse | null>(null);
+  /** Локальный in-flight запрос этой вкладки (не путать с server pending после F5). */
+  const localRequestRef = useRef(false);
+  const sawServerPendingRef = useRef(false);
+  const messagesRef = useRef<Bubble[]>([]);
   const finetuneBusy =
     status?.finetune?.state === "running";
 
@@ -117,8 +121,9 @@ export default function App() {
       setStatus(st);
       statusRef.current = st;
       setPending(pend.pending ?? null);
+      return st;
     } catch {
-      /* ignore */
+      return null;
     }
   }, []);
 
@@ -135,24 +140,64 @@ export default function App() {
       const data = await fetchHistory({ limit: PAGE_SIZE });
       setHasMore(!!data.has_more);
       setOldestIndex(data.oldest_index);
-      setMessages(
-        (data.messages || []).map((m, i) => ({
-          id: `${idBase}-h-${i}`,
-          who: roleToWho(m.role),
-          text: m.content,
-          at: m.ts ?? null,
-          replyTo: m.reply_to?.content
-            ? {
-                who: roleToWho(m.reply_to.role || "assistant"),
-                text: m.reply_to.content,
-              }
-            : null,
-        })),
-      );
+      const mapped = (data.messages || []).map((m, i) => ({
+        id: `${idBase}-h-${i}`,
+        who: roleToWho(m.role),
+        text: m.content,
+        at: m.ts ?? null,
+        replyTo: m.reply_to?.content
+          ? {
+              who: roleToWho(m.reply_to.role || "assistant"),
+              text: m.reply_to.content,
+            }
+          : null,
+      }));
+      setMessages(mapped);
+      return mapped;
     } catch {
       setHasMore(false);
+      return [];
     }
   }, [idBase]);
+
+  const syncChatPending = useCallback(
+    async (
+      st: StatusResponse | null | undefined,
+      history?: { who: string }[],
+    ) => {
+      if (localRequestRef.current) {
+        // Локальный запрос сам держит thinking; подтянем лейбл фазы с сервера
+        const label = st?.chat_pending?.label;
+        if (label) setThinking(label);
+        return;
+      }
+
+      const rows = history ?? messagesRef.current;
+      const last = rows.length ? rows[rows.length - 1] : null;
+      const lastIsUser = last?.who === "user";
+      const label = st?.chat_pending?.label || "Вникаю…";
+
+      // Главный сигнал после F5: в истории есть вопрос без ответа
+      if (lastIsUser) {
+        sawServerPendingRef.current = true;
+        setThinking(label);
+        setBusy(true);
+        return;
+      }
+
+      if (sawServerPendingRef.current) {
+        sawServerPendingRef.current = false;
+        setBusy(false);
+        setThinking(null);
+      }
+    },
+    [],
+  );
+
+  const onBusyFromPanel = useCallback((v: boolean) => {
+    localRequestRef.current = v;
+    setBusy(v);
+  }, []);
 
   const loadOlderHistory = useCallback(async () => {
     if (
@@ -191,19 +236,46 @@ export default function App() {
   }, [idBase]);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     let alive = true;
     (async () => {
-      await loadInitialHistory();
+      const hist = await loadInitialHistory();
       if (!alive) return;
-      await refreshStatus();
+      // Сразу, до status: если лента обрывается на вопросе — покажи «Вникаю…»
+      if (hist.at(-1)?.who === "user") {
+        sawServerPendingRef.current = true;
+        setThinking("Вникаю…");
+        setBusy(true);
+      }
+      const st = await refreshStatus();
+      if (!alive) return;
+      await syncChatPending(st, hist);
       try {
-        const hello = await proactiveHello();
-        if (alive && hello.message) addBubble(hello.message, "bot");
+        if (hist.at(-1)?.who !== "user" && !st?.chat_pending) {
+          const hello = await proactiveHello();
+          if (alive && hello.message) addBubble(hello.message, "bot");
+        }
       } catch {
         /* ignore */
       }
     })();
-    const statusTimer = window.setInterval(() => void refreshStatus(), 15000);
+
+    const statusTimer = window.setInterval(async () => {
+      const st = await refreshStatus();
+      if (!alive) return;
+      // Пока ждём ответ после F5 — подтягиваем историю, чтобы поймать появление реплики
+      if (sawServerPendingRef.current && !localRequestRef.current) {
+        const hist = await loadInitialHistory();
+        if (!alive) return;
+        await syncChatPending(st, hist);
+      } else {
+        await syncChatPending(st);
+      }
+    }, 2000);
+
     const newsTimer = window.setInterval(async () => {
       if (statusRef.current?.finetune?.state === "running") {
         setNewsThinking(null);
@@ -220,6 +292,7 @@ export default function App() {
     }, 2500);
     const pingTimer = window.setInterval(async () => {
       if (statusRef.current?.finetune?.state === "running") return;
+      if (statusRef.current?.chat_pending) return;
       try {
         const data = await proactivePing();
         if (data.message) addBubble(data.message, "bot");
@@ -234,10 +307,12 @@ export default function App() {
       window.clearInterval(newsTimer);
       window.clearInterval(pingTimer);
     };
-  }, [addBubble, loadInitialHistory, refreshStatus]);
+  }, [addBubble, loadInitialHistory, refreshStatus, syncChatPending]);
 
   const onSend = async (message: string) => {
     if (busy || statusRef.current?.finetune?.state === "running") return;
+    if (statusRef.current?.chat_pending) return;
+    localRequestRef.current = true;
     setBusy(true);
     unlockReplySound();
     const activeReply = replyTo;
@@ -248,17 +323,19 @@ export default function App() {
         setStagedFile(null);
         const label = message ? `${message}\n📎 ${file.name}` : `📎 ${file.name}`;
         addBubble(label, "user");
-        setThinking("Читаю…");
+        setThinking("Изучаю…");
         try {
           const data = await uploadBook(
             file,
             archiveMember.trim() || null,
             message || null,
           );
+          sawServerPendingRef.current = false;
           addBubble(data.reply || data.digest || "Готово", "bot");
           playReplySound();
           void refreshStatus();
         } catch (err) {
+          sawServerPendingRef.current = false;
           addBubble(err instanceof Error ? err.message : String(err), "bot");
           playReplySound();
         }
@@ -285,16 +362,21 @@ export default function App() {
             : null,
           reply_chain: chain,
         });
+        sawServerPendingRef.current = false;
         addBubble(data.reply || "(пустой ответ)", "bot");
         playReplySound();
         void refreshStatus();
       } catch (err) {
+        sawServerPendingRef.current = false;
         addBubble(err instanceof Error ? err.message : String(err), "bot");
         playReplySound();
       }
     } finally {
-      setThinking(null);
-      setBusy(false);
+      localRequestRef.current = false;
+      if (!statusRef.current?.chat_pending) {
+        setThinking(null);
+        setBusy(false);
+      }
     }
   };
 
@@ -413,7 +495,7 @@ export default function App() {
             onArchiveMember={setArchiveMember}
             onBubble={addBubble}
             onThinking={setThinking}
-            onBusy={setBusy}
+            onBusy={onBusyFromPanel}
             onRefresh={() => void refreshStatus()}
             onResetChat={() => {
               setMessages([]);

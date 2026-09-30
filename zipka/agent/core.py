@@ -24,6 +24,7 @@ from zipka.sensors.eyes import Eyes
 
 from . import books_intent, prompting, runtime, vision_intent
 from .chat_pipeline import ChatCtx, run_chat_pipeline
+from .pending_turn import PendingTurnTracker
 
 
 class Zipka:
@@ -61,11 +62,22 @@ class Zipka:
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self._reset_pending = False
         self._chat_busy = False
+        self.pending_turn = PendingTurnTracker(
+            self.settings.data_dir / "mind" / "chat_pending.json"
+        )
+        # После рестарта процесса старый pending с диска неактуален
+        self.pending_turn.clear()
 
     # --- busy / runtime ---
 
     def is_chat_busy(self) -> bool:
-        return bool(self._chat_busy)
+        return bool(self._chat_busy) or self.pending_turn.active()
+
+    def set_chat_phase(self, phase: str, label: str | None = None) -> None:
+        self.pending_turn.set_phase(phase, label)
+
+    def chat_pending_status(self) -> dict[str, Any] | None:
+        return self.pending_turn.snapshot()
 
     def is_finetune_busy(self) -> bool:
         return runtime.is_finetune_busy(self)
@@ -141,21 +153,64 @@ class Zipka:
     ) -> str:
         if self.is_finetune_busy():
             return self.FINETUNE_BUSY_MSG
-        self._chat_busy = True
-        try:
-            return self._chat_inner(
-                user_text,
-                auto_soft=auto_soft,
-                reply_to=reply_to,
-                reply_chain=reply_chain,
+        if self.pending_turn.active() or self._chat_busy:
+            return (
+                "Я ещё отвечаю на предыдущее сообщение. "
+                "Подожди или обнови ленту — ответ появится сам."
             )
-        finally:
-            self._chat_busy = False
+        text = user_text.strip()
+        if not text:
+            return "Пусто. Скажи что-нибудь."
+
+        reply_context = prompting.normalize_reply_context(reply_chain, reply_to)
+        reply_to_last = reply_context[-1] if reply_context else None
+
+        # Сразу в историю + pending (файл): F5 не должен съесть вопрос/статус
+        self.pending_turn.begin(
+            user_text=text,
+            phase="replying",
+            kind="chat",
+            reply_to=reply_to_last,
+        )
+        self.memory.add_chat("user", text, reply_to=reply_to_last)
+        self.pending_turn.mark_user_saved()
+        self._chat_busy = True
+        self._last_chat_reply: str | None = None
+
+        done = threading.Event()
+
+        def _worker() -> None:
             try:
-                if not self.is_finetune_busy():
-                    self.news.on_chat_idle()
-            except Exception:
-                pass
+                reply = run_chat_pipeline(
+                    self,
+                    ChatCtx(
+                        text=text,
+                        auto_soft=auto_soft,
+                        reply_context=reply_context,
+                    ),
+                )
+                self._ensure_assistant_saved(reply)
+                self._last_chat_reply = reply
+            except Exception as exc:
+                err = f"Не смогла ответить: {exc}"
+                self._ensure_assistant_saved(err)
+                self._last_chat_reply = err
+            finally:
+                self._chat_busy = False
+                self.pending_turn.clear()
+                done.set()
+                try:
+                    if not self.is_finetune_busy():
+                        self.news.on_chat_idle()
+                except Exception:
+                    pass
+
+        # Отдельный поток: обрыв HTTP (F5) не отменяет генерацию и не сбрасывает pending
+        threading.Thread(
+            target=_worker, name="zipka-chat-turn", daemon=True
+        ).start()
+        done.wait()
+        return self._last_chat_reply or ""
 
     def _chat_inner(
         self,
@@ -165,6 +220,7 @@ class Zipka:
         reply_to: dict[str, Any] | None = None,
         reply_chain: list[dict[str, Any]] | None = None,
     ) -> str:
+        """Совместимость: прямой вызов без pending (редко). Предпочтителен chat()."""
         text = user_text.strip()
         if not text:
             return "Пусто. Скажи что-нибудь."
@@ -173,6 +229,49 @@ class Zipka:
             self,
             ChatCtx(text=text, auto_soft=auto_soft, reply_context=reply_context),
         )
+
+    def _ensure_assistant_saved(self, reply: str) -> None:
+        """Если хендлер не вызвал _remember_turn — дописать ответ сами."""
+        if self.pending_turn.assistant_saved():
+            return
+        if not self.pending_turn.user_saved():
+            return
+        self.memory.add_chat("assistant", reply)
+        self.pending_turn.mark_assistant_saved()
+
+    def run_with_pending(
+        self,
+        *,
+        user_text: str,
+        phase: str,
+        kind: str,
+        label: str | None = None,
+        reply_to: dict[str, Any] | None = None,
+        save_user: bool = True,
+    ):
+        """Контекст для upload/learn: pending + опционально user в историю."""
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            self.pending_turn.begin(
+                user_text=user_text,
+                phase=phase,
+                label=label,
+                kind=kind,
+                reply_to=reply_to,
+            )
+            if save_user:
+                self.memory.add_chat("user", user_text, reply_to=reply_to)
+                self.pending_turn.mark_user_saved()
+            self._chat_busy = True
+            try:
+                yield self
+            finally:
+                self._chat_busy = False
+                self.pending_turn.clear()
+
+        return _cm()
 
     def _schedule_post_chat(
         self,
@@ -293,6 +392,13 @@ class Zipka:
         *,
         reply_to: dict[str, Any] | None = None,
     ) -> None:
+        # User уже записан в chat() / run_with_pending — только ответ
+        if self.pending_turn.user_saved() and not self.pending_turn.assistant_saved():
+            self.memory.add_chat("assistant", reply)
+            self.pending_turn.mark_assistant_saved()
+            return
+        if self.pending_turn.assistant_saved():
+            return
         self.memory.add_chat("user", user_text, reply_to=reply_to)
         self.memory.add_chat("assistant", reply)
 

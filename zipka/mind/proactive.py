@@ -17,13 +17,33 @@ MAX_RARE_PINGS_PER_DAY = 3
 GOAL_NUDGE_EVERY_TURNS = 5
 
 
+# Редкие «сама написала первой» реплики — сценарии для LLM (не для пользователя)
 SCENARIOS = [
-    "короткий пинг по текущей цели — будто подошла первая",
-    "лёгкая ирония про то, что пользователь затих",
-    "вопрос по фокусу из mind/state",
-    "предложение изучить что-то новое (книга/код/тема)",
-    "реплика про настроение и что хочешь сделать дальше",
+    "мягко напомнить про текущую цель из списка — как будто сама вспомнила",
+    "заметить, что собеседник затих, и осторожно спросить, на месте ли он — без претензии",
+    "короткий вопрос по фокусу из mind/state",
+    "предложить изучить что-то новое (книга, код или тема) — одной фразой",
+    "спросить про настроение и что сейчас хочется сделать",
 ]
+
+_PING_FALLBACKS = [
+    "Ты тут? Я рядом — если что, просто напиши.",
+    "Затих. Я не давлю, просто на связи. Что у тебя сейчас в голове?",
+    "Кстати… есть минутка? Могу коротко по делу или просто поболтать.",
+    "Не пропади. Если занят — ок, я подожду; если свободен — скажи, чем заняться.",
+]
+
+_BAD_PING_RE = re.compile(
+    r"(?i)("
+    r"почему\s+ты\s+пинг|"
+    r"зачем\s+ты\s+пинг|"
+    r"что\s+ты\s+пинг|"
+    r"ты\s+пинг(уешь|анул|анула|нул)|"
+    r"перестань\s+пинг|"
+    r"хватит\s+пинг|"
+    r"не\s+пинг(уй|овать)"
+    r")"
+)
 
 
 class ProactiveEngine:
@@ -412,7 +432,10 @@ class ProactiveEngine:
         }
 
     def maybe_rare_ping(self, *, force: bool = False) -> str | None:
-        """Редкий фоновый пинг: не больше 2–3 раз в день."""
+        """Редкий фоновый пинг: не больше 2–3 раз в день.
+
+        Это Зипка сама пишет после тишины — не ответ на «пинг» пользователя.
+        """
         if not force and not self.rare_ping_allowed():
             return None
         if not force:
@@ -435,29 +458,7 @@ class ProactiveEngine:
             if random.random() > 0.35:
                 return None
 
-        scenario = random.choice(SCENARIOS)
-        prompt = (
-            self._persona_bits()
-            + f"Сценарий: {scenario}. "
-            "Напиши 1–3 предложения: Зипка сама начала разговор. "
-            "Без приветствия «здравствуйте», без воды."
-        )
-        if not self.llm.is_available():
-            from zipka.mind.goals import normalize_goals
-
-            mind = self.mind.load()
-            goals = normalize_goals(mind.get("goals") or ["жизнь"])
-            text = (
-                f"Эй. По цели «{goals[0]}» — "
-                "ты ещё со мной или уже в другом окне?"
-            )
-        else:
-            text = self.llm.chat(
-                [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": "Пинг."},
-                ]
-            ).strip()
+        text = self._compose_rare_ping()
 
         state = self._load()
         today = date.today().isoformat()
@@ -468,6 +469,76 @@ class ProactiveEngine:
         state["last_rare_ping_at"] = datetime.now(timezone.utc).isoformat()
         self._save(state)
         self._log("rare_ping", text)
+        return text
+
+    def _compose_rare_ping(self) -> str:
+        from zipka.llm.sanitize import (
+            enforce_addressee_gender,
+            is_degenerate_generation,
+            load_addressee_gender,
+        )
+        from zipka.mind.goals import normalize_goals
+
+        mind = self.mind.load()
+        goals = normalize_goals(mind.get("goals") or [])
+        scenario = random.choice(SCENARIOS)
+        gender = load_addressee_gender()
+        gender_hint = ""
+        if gender == "male":
+            gender_hint = (
+                "Собеседник — мужчина: к нему мужской род (ты затих, занят), "
+                "о себе — только женский род.\n"
+            )
+        elif gender == "female":
+            gender_hint = (
+                "Собеседник — женщина: к ней женский род; о себе — женский род.\n"
+            )
+
+        prompt = (
+            self._persona_bits()
+            + gender_hint
+            + "Контекст: собеседник молчит уже какое-то время. "
+            "Ты (Зипка) сама пишешь первой — мягко напомнить о себе. "
+            "Он тебя НЕ вызывал и НЕ «пинговал»: не обвиняй его в пинге, "
+            "не спрашивай «почему ты пингуешь / что тебе нужно».\n"
+            f"Сценарий: {scenario}.\n"
+            "Напиши 1–2 коротких предложения живым тоном. "
+            "Можно слегка подколоть тишину, но без претензии и без канцелярита. "
+            "Не используй слова «пинг», «ping», «уведомление», «система». "
+            "Без «здравствуйте», без списка пунктов, без прощания."
+        )
+        if goals:
+            prompt += f" Можно опереться на цель: «{goals[0]}»."
+
+        fallback = random.choice(_PING_FALLBACKS)
+        if goals and random.random() < 0.5:
+            fallback = (
+                f"Ты тут? По цели «{goals[0]}» — продолжаем или пока на паузе?"
+            )
+
+        if not self.llm.is_available():
+            text = fallback
+        else:
+            text = self.llm.chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Напиши реплику от себя: ты первая нарушила тишину. "
+                            "Собеседник молчал — не пиши так, будто это он тебя дёргал."
+                        ),
+                    },
+                ]
+            ).strip()
+            if (
+                not text
+                or is_degenerate_generation(text)
+                or _BAD_PING_RE.search(text)
+                or re.search(r"(?i)\bping\b|пинг", text)
+            ):
+                text = fallback
+            text = enforce_addressee_gender(text, gender)
         return text
 
     def attach(self, main: str, extra: str | None) -> str:

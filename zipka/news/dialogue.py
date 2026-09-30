@@ -13,16 +13,17 @@ from zipka.llm.base import LlmError
 if TYPE_CHECKING:
     from zipka.news.reader import NewsDesk
 
+# одно «слово» темы + до 3 следующих (ФИО / бренд из нескольких слов)
+_TOPIC_WORD = r"[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9\-.&]{0,48}"
+_TOPIC_PHRASE = rf"({_TOPIC_WORD}(?:\s+{_TOPIC_WORD}){{0,3}})"
 # «о»/«про» только как отдельные слова — иначе «было»/«интересного» дают ложный topic
 _TOPIC_PREP_RE = re.compile(
     r"(?i)(?<![A-Za-zА-Яа-яЁё0-9])(?:про|о|об|насчёт|насчет)"
-    r"(?![A-Za-zА-Яа-яЁё0-9])\s+[«\"]?"
-    r"([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9\-.&]{1,48})"
-    r"[»\"]?",
+    rf"(?![A-Za-zА-Яа-яЁё0-9])\s+[«\"]?{_TOPIC_PHRASE}[»\"]?",
 )
 _MENTION_RE = re.compile(
     r"(?i)упоминал\w*\s+(?:(?:ли|про|о|об)\s+)*"
-    r"[«\"]?([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9\-.&]{1,40})[»\"]?",
+    rf"[«\"]?{_TOPIC_PHRASE}[»\"]?",
 )
 _SOURCE_RE = re.compile(
     r"(?i)(?:из|в|у|канал(?:е|а)?|источник(?:е|а)?)\s+"
@@ -91,23 +92,46 @@ _TOPIC_STOP = {
     "свежих",
     "сегодня",
     "неделе",
+    "ли",
+    "в",
+    "на",
+    "из",
+    "за",
+    "по",
+    "к",
+    "ко",
+    "у",
+    "и",
+    "или",
 }
+
+
+def _clean_topic(raw: str) -> str | None:
+    words = [w.strip(" .,!?:;«»\"'") for w in raw.split()]
+    while words and words[-1].lower() in _TOPIC_STOP:
+        words.pop()
+    while words and words[0].lower() in _TOPIC_STOP:
+        words.pop(0)
+    topic = " ".join(words).strip(" .,!?:;")
+    if not topic or topic.lower() in _TOPIC_STOP:
+        return None
+    return topic
 
 
 def extract_topic(text: str) -> str | None:
     m = _TOPIC_PREP_RE.search(text)
     if m:
-        topic = m.group(1).strip(" .,!?:;")
-        if topic.lower() not in _TOPIC_STOP:
+        topic = _clean_topic(m.group(1))
+        if topic:
             return topic
     m2 = _MENTION_RE.search(text)
     if m2:
-        topic = m2.group(1).strip(" .,!?:;")
-        if topic.lower() not in _TOPIC_STOP | {"ли", "в", "на"}:
+        topic = _clean_topic(m2.group(1))
+        if topic:
             return topic
     q = _QUOTED_RE.search(text)
     if q:
-        return q.group(1).strip()
+        return _clean_topic(q.group(1))
     return None
 
 

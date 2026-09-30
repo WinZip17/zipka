@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from zipka.agent.pending_turn import PendingTurnTracker
 from zipka.books.reader import BookReader
 from zipka.character.persona import Persona
 from zipka.config import ensure_data_dirs
@@ -108,6 +109,10 @@ def reload_runtime(agent: Any) -> None:
     agent.uploads_dir.mkdir(parents=True, exist_ok=True)
     agent._reset_pending = False
     agent._chat_busy = False
+    agent.pending_turn = PendingTurnTracker(
+        agent.settings.data_dir / "mind" / "chat_pending.json"
+    )
+    agent.pending_turn.clear()
 
 
 def reset_learning(agent: Any, *, confirm: bool = False) -> dict[str, Any]:
@@ -190,6 +195,8 @@ def status(agent: Any) -> dict[str, Any]:
         ),
         "chat_models": roles,
         "model_roles": roles,
+        "chat_busy": agent.is_chat_busy(),
+        "chat_pending": agent.chat_pending_status(),
     }
 
 

@@ -65,37 +65,50 @@ def handle_reset(agent: Any, ctx: ChatCtx) -> str | None:
 
 def handle_url_read(agent: Any, ctx: ChatCtx) -> str | None:
     # URL раньше файлов: иначе https://habr.com ловится как s:\habr.c
+    agent.set_chat_phase("reading")
     reply = books_intent.try_read_url_from_message(agent, ctx.text)
     if reply is not None:
         agent._remember_turn(ctx.text, reply)
-    return reply
+        return reply
+    agent.set_chat_phase("replying")
+    return None
 
 
 def handle_news(agent: Any, ctx: ChatCtx) -> str | None:
+    agent.set_chat_phase("news")
     reply = agent.news.handle_chat_command(ctx.text)
     if reply is not None:
         agent._remember_turn(ctx.text, reply)
-    return reply
+        return reply
+    agent.set_chat_phase("replying")
+    return None
 
 
 def handle_book_read(agent: Any, ctx: ChatCtx) -> str | None:
+    agent.set_chat_phase("studying")
     reply = books_intent.try_read_from_message(agent, ctx.text)
     if reply is not None:
         agent._remember_turn(ctx.text, reply)
-    return reply
+        return reply
+    agent.set_chat_phase("replying")
+    return None
 
 
 def handle_look(agent: Any, ctx: ChatCtx) -> str | None:
+    agent.set_chat_phase("looking")
     reply = vision_intent.try_look_from_message(agent, ctx.text)
     if reply is not None:
         agent._remember_turn(ctx.text, reply)
-    return reply
+        return reply
+    agent.set_chat_phase("replying")
+    return None
 
 
 def handle_llm_reply(agent: Any, ctx: ChatCtx) -> str | None:
     """Финальный хендлер: всегда возвращает str (не None)."""
     text = ctx.text
     reply_context = ctx.reply_context
+    agent.set_chat_phase("replying")
 
     if not agent.llm.is_available():
         info = describe_backend(agent.llm)

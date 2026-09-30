@@ -136,24 +136,66 @@ function InfoBlock({ title, children }: { title: string; children: ReactNode }) 
   );
 }
 
-function InfoLine({ label, value }: { label: string; value: ReactNode }) {
+type InfoLineVariant = "columns" | "inline";
+
+function InfoLine({
+  label,
+  value,
+  variant = "columns",
+  labelWidth = 132,
+}: {
+  label: string;
+  value: ReactNode;
+  variant?: InfoLineVariant;
+  labelWidth?: number;
+}) {
+  if (variant === "inline") {
+    return (
+      <Typography
+        variant="body2"
+        sx={{
+          py: 0.3,
+          lineHeight: 1.45,
+          color: "text.primary",
+          wordBreak: "break-word",
+        }}
+      >
+        <Box component="span" sx={{ color: "text.secondary", fontWeight: 600 }}>
+          {label}:
+        </Box>{" "}
+        {value}
+      </Typography>
+    );
+  }
+
+  // columns: фиксированный лейбл слева, значение сразу рядом (не у правого края)
   return (
     <Stack
       direction="row"
-      spacing={1}
-      sx={{
-        justifyContent: "space-between",
-        alignItems: "baseline",
-        gap: 1,
-        py: 0.35,
-      }}
+      spacing={1.25}
+      sx={{ alignItems: "flex-start", py: 0.35 }}
     >
-      <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{
+          width: labelWidth,
+          minWidth: labelWidth,
+          flexShrink: 0,
+          lineHeight: 1.45,
+        }}
+      >
         {label}
       </Typography>
       <Typography
         variant="body2"
-        sx={{ textAlign: "right", color: "text.primary", wordBreak: "break-word" }}
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          color: "text.primary",
+          wordBreak: "break-word",
+          lineHeight: 1.45,
+        }}
       >
         {value}
       </Typography>
@@ -1301,6 +1343,7 @@ export function SidePanel({
           <InfoBlock title="Модель">
             <InfoLine
               label="Бэкенд"
+              variant="inline"
               value={
                 llmBackend === "gguf"
                   ? `GGUF (${llmOk ? "готов" : "нужен llama-cpp-python"})`
@@ -1311,6 +1354,7 @@ export function SidePanel({
             />
             <InfoLine
               label="Чат"
+              variant="inline"
               value={
                 status?.chat_models?.chat?.label ||
                 status?.chat_models?.active_label ||
@@ -1321,6 +1365,7 @@ export function SidePanel({
             />
             <InfoLine
               label="Кодинг"
+              variant="inline"
               value={
                 status?.chat_models?.code?.label ||
                 status?.chat_models?.code?.filename ||
@@ -1337,7 +1382,7 @@ export function SidePanel({
               </Typography>
             ) : null}
             {llmBackend === "gguf" && status?.llm?.model_path ? (
-              <InfoLine label="Файл чата" value={status.llm.model_path} />
+              <InfoLine label="Файл чата" value={status.llm.model_path} variant="inline" />
             ) : null}
             {(status?.chat_models?.files || []).length > 0 ? (
               <Typography
@@ -1351,7 +1396,11 @@ export function SidePanel({
               </Typography>
             ) : null}
             {llmBackend !== "gguf" ? (
-              <InfoLine label="Vision" value={status?.vision_model || status?.model || "—"} />
+              <InfoLine
+                label="Vision"
+                variant="inline"
+                value={status?.vision_model || status?.model || "—"}
+              />
             ) : (
               <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
                 Vision:{" "}
@@ -1377,12 +1426,13 @@ export function SidePanel({
           <InfoBlock title="Сенсоры">
             <InfoLine
               label="В настройках"
+              variant="inline"
               value={sensorsFeature ? "разрешены" : "выкл"}
             />
             {sensorsFeature ? (
               <>
-                <InfoLine label="Глаза" value={eyesOn ? "вкл" : "выкл"} />
-                <InfoLine label="Уши" value={earsOn ? "вкл" : "выкл"} />
+                <InfoLine label="Глаза" value={eyesOn ? "вкл" : "выкл"} variant="inline" />
+                <InfoLine label="Уши" value={earsOn ? "вкл" : "выкл"} variant="inline" />
               </>
             ) : (
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -1392,13 +1442,14 @@ export function SidePanel({
           </InfoBlock>
 
           <InfoBlock title="Патчи кода">
-            <InfoLine label="Ожидает" value={status?.pending_patch ? "да" : "нет"} />
-            <InfoLine label="Фраза approve" value={`«${approvePhrase}»`} />
+            <InfoLine label="Ожидает" value={status?.pending_patch ? "да" : "нет"} variant="inline" />
+            <InfoLine label="Фраза approve" value={`«${approvePhrase}»`} variant="inline" />
           </InfoBlock>
 
           <InfoBlock title="Проактивность">
             <InfoLine
               label="Пинги сегодня"
+              variant="inline"
               value={
                 ping
                   ? `${ping.used ?? 0} / ${ping.max ?? 3} (осталось ${ping.remaining ?? "—"})`

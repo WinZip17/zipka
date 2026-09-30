@@ -185,6 +185,16 @@ export type StatusResponse = {
     remaining?: number;
     last_rare_ping_at?: string | null;
   };
+  chat_busy?: boolean;
+  chat_pending?: {
+    id?: string;
+    kind?: string;
+    phase?: string;
+    label?: string;
+    user_text?: string;
+    started_at?: string;
+    user_saved?: boolean;
+  } | null;
 };
 
 export type PendingResponse = {

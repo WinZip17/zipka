@@ -295,33 +295,47 @@ def ingest_uploaded_book(
             + ", ".join(sorted(READABLE_SUFFIXES | ARCHIVE_SUFFIXES)[:40])
             + ", …"
         )
-    dest = agent.uploads_dir / safe_name
-    dest.write_bytes(content)
-    result = agent.books.read(dest, member=member, comment=comment)
-    result["uploaded_path"] = str(dest)
-    preview = (result.get("digest") or "")[:1500]
-    kind = result.get("kind") or "book"
-    label = "код" if kind.startswith("code") else "файл"
-    comment_line = f"Комментарий учтён: {comment}\n" if comment else ""
-    reply = (
-        f"{label.capitalize()} `{safe_name}` принят и изучен.\n"
-        f"{comment_line}"
-        f"Фрагментов: {result['chunks']}. "
-        f"Выжимка: `{result['digest_path']}`\n\n{preview}"
-    )
-    try:
-        follow = agent.proactive.study_followup(
-            source=safe_name,
-            digest=result.get("digest") or "",
-            kind=kind,
-            comment=comment,
-        )
-        reply = agent.proactive.attach(reply, follow)
-    except Exception:
-        pass
     note = f"[upload] {safe_name}"
     if comment:
         note += f" | {comment}"
-    agent._remember_turn(note, reply)
-    result["reply"] = reply
-    return result
+
+    with agent.run_with_pending(
+        user_text=note,
+        phase="studying",
+        kind="upload",
+        label="Изучаю…",
+        save_user=True,
+    ):
+        try:
+            dest = agent.uploads_dir / safe_name
+            dest.write_bytes(content)
+            result = agent.books.read(dest, member=member, comment=comment)
+            result["uploaded_path"] = str(dest)
+            preview = (result.get("digest") or "")[:1500]
+            kind = result.get("kind") or "book"
+            label = "код" if kind.startswith("code") else "файл"
+            comment_line = f"Комментарий учтён: {comment}\n" if comment else ""
+            reply = (
+                f"{label.capitalize()} `{safe_name}` принят и изучен.\n"
+                f"{comment_line}"
+                f"Фрагментов: {result['chunks']}. "
+                f"Выжимка: `{result['digest_path']}`\n\n{preview}"
+            )
+            try:
+                follow = agent.proactive.study_followup(
+                    source=safe_name,
+                    digest=result.get("digest") or "",
+                    kind=kind,
+                    comment=comment,
+                )
+                reply = agent.proactive.attach(reply, follow)
+            except Exception:
+                pass
+            agent._remember_turn(note, reply)
+            agent._ensure_assistant_saved(reply)
+            result["reply"] = reply
+            return result
+        except Exception as exc:
+            err = f"Не смогла прочитать `{safe_name}`: {exc}"
+            agent._ensure_assistant_saved(err)
+            raise

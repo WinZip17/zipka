@@ -41,30 +41,6 @@ _DAYS_RE = re.compile(
     r"за\s+(\d+)\s*(?:дн|день|дня)"
 )
 
-# частые кириллица↔латиница для ритейла/брендов
-_ALIASES: dict[str, tuple[str, ...]] = {
-    "озон": ("ozon", "озон"),
-    "ozon": ("ozon", "озон"),
-    "вайлдберриз": ("wildberries", "wb", "вайлдберриз", "wildberries"),
-    "wildberries": ("wildberries", "wb", "вайлдберриз"),
-    "wb": ("wildberries", "wb", "вайлдберриз"),
-    "яндекс": ("yandex", "яндекс"),
-    "yandex": ("yandex", "яндекс"),
-    "сбер": ("sber", "сбер", "sberbank"),
-    "тинькофф": ("tinkoff", "tbank", "тинькофф"),
-}
-
-
-def _query_variants(query: str) -> list[str]:
-    q = query.strip().lower()
-    variants = {q}
-    for part in re.split(r"\s+", q):
-        variants.add(part)
-        for alt in _ALIASES.get(part, ()):
-            variants.add(alt)
-    return [v for v in variants if len(v) >= 2]
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -238,6 +214,7 @@ class NewsDesk:
         self._auto_phase = ""
         self._pending_after_chat = False
         self._last_auto_result: dict[str, Any] | None = None
+        self._lemmas_ready = False
         if not self.sources_path.exists():
             self.save_sources(
                 {
@@ -535,6 +512,9 @@ class NewsDesk:
         return ids
 
     def append_item(self, item: dict[str, Any]) -> None:
+        from zipka.news.ru_index import ensure_item_lemmas
+
+        ensure_item_lemmas(item)
         self.items_path.parent.mkdir(parents=True, exist_ok=True)
         with self.items_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
@@ -555,6 +535,36 @@ class NewsDesk:
         if limit is not None and limit > 0:
             return rows[-limit:]
         return rows
+
+    def rewrite_items(self, rows: list[dict[str, Any]]) -> None:
+        """Перезаписать items.jsonl (реиндекс лемм и т.п.)."""
+        self.items_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.items_path.with_suffix(".jsonl.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        tmp.replace(self.items_path)
+
+    def ensure_lemmas_indexed(self, *, force: bool = False) -> int:
+        """Проставить lemmas у старых выдержек. Возвращает число обновлённых строк."""
+        from zipka.news.ru_index import ensure_item_lemmas
+
+        if self._lemmas_ready and not force:
+            return 0
+        rows = self.load_items()
+        if not rows:
+            self._lemmas_ready = True
+            return 0
+        changed = 0
+        for row in rows:
+            before = row.get("lemmas")
+            ensure_item_lemmas(row, force=force)
+            if force or before != row.get("lemmas"):
+                changed += 1
+        if changed:
+            self.rewrite_items(rows)
+        self._lemmas_ready = True
+        return changed
 
     def _http_get(self, url: str, *, timeout: float = 45.0) -> str:
         with httpx.Client(
@@ -886,31 +896,49 @@ class NewsDesk:
         days: int = 7,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        q = (query or "").strip().lower()
+        from zipka.news.ru_index import (
+            FUZZY_MIN,
+            build_idf,
+            ensure_item_lemmas,
+            fuzzy_fallback_score,
+            lemma_match_score,
+            query_lemma_groups,
+        )
+
+        q = (query or "").strip()
         if not q:
             return []
-        variants = _query_variants(q)
+        try:
+            self.ensure_lemmas_indexed()
+        except OSError:
+            pass
+
+        q_groups = query_lemma_groups(q)
         since = _utc_now() - timedelta(days=max(1, days))
-        hits: list[dict[str, Any]] = []
+        pool: list[dict[str, Any]] = []
+        lemma_docs: list[list[str]] = []
         for row in self.load_items():
             when = _parse_dt(row.get("published_at")) or _parse_dt(row.get("fetched_at"))
             if when and when < since:
                 continue
-            blob = " ".join(
-                [
-                    str(row.get("title") or ""),
-                    str(row.get("summary") or ""),
-                    str(row.get("text") or ""),
-                    str(row.get("source") or ""),
-                ]
-            ).lower()
-            score = sum(1 for tok in variants if tok in blob)
-            if score <= 0:
-                continue
+            lemmas = ensure_item_lemmas(row)
+            pool.append(row)
+            lemma_docs.append(lemmas)
+
+        idf = build_idf(lemma_docs)
+        hits: list[dict[str, Any]] = []
+        for row in pool:
+            lemmas = ensure_item_lemmas(row)
+            ok, score = lemma_match_score(lemmas, q_groups, idf=idf)
+            if not ok:
+                fuzzy = fuzzy_fallback_score(q, row)
+                if fuzzy < FUZZY_MIN:
+                    continue
+                score = fuzzy / 10.0
             hits.append({**row, "_score": score})
         hits.sort(
             key=lambda r: (
-                int(r.get("_score") or 0),
+                float(r.get("_score") or 0),
                 str(r.get("published_at") or r.get("fetched_at") or ""),
             ),
             reverse=True,

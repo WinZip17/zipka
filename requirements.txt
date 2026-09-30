@@ -15,6 +15,10 @@ beautifulsoup4>=4.12.0
 rarfile>=4.2
 djvu-rs>=0.35.0
 opencv-python>=4.8.0
+pymorphy3>=2.0.0
+pymorphy3-dicts-ru>=2.4.0
+razdel>=0.5.0
+rapidfuzz>=3.6.0
 # опционально: локальные GGUF без системной Ollama (на Windows — только wheel, иначе длинные пути):
 # pip install llama-cpp-python --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 # llama-cpp-python>=0.3.0

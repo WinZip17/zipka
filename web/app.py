@@ -329,7 +329,24 @@ def api_ears(body: ActionIn) -> dict:
 @app.post("/api/learn")
 def api_learn(body: LearnIn) -> dict:
     _ensure_not_finetuning()
-    return agent.net.learn(body.query)
+    q = (body.query or "").strip()
+    note = f"[learn] {q}" if q else "[learn]"
+    with agent.run_with_pending(
+        user_text=note,
+        phase="learning",
+        kind="learn",
+        label="Учусь…",
+        save_user=True,
+    ):
+        try:
+            result = agent.net.learn(body.query)
+            summary = result.get("summary") or str(result)
+            agent._remember_turn(note, summary)
+            agent._ensure_assistant_saved(summary)
+            return result
+        except Exception as exc:
+            agent._ensure_assistant_saved(f"Не смогла изучить: {exc}")
+            raise
 
 
 @app.post("/api/read")
