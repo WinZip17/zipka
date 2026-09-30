@@ -13,7 +13,10 @@ from typing import Any
 
 
 def _log(msg: str) -> None:
-    print(msg, flush=True)
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
 def _write_job(path: Path, job: dict[str, Any]) -> None:
@@ -166,7 +169,7 @@ def _exc_text(exc: BaseException) -> str:
 def _format_gb(n: float | int | None) -> str:
     if n is None:
         return "?"
-    return f"{float(n) / 1e9:.1f} ГБ"
+    return f"{float(n) / 1e9:.1f} GB"
 
 
 def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
@@ -399,38 +402,228 @@ def train_lora(job: dict[str, Any], data_dir: Path) -> dict[str, Any]:
     tokenizer.save_pretrained(str(adapter_dir))
     _log(f"Adapter saved: {adapter_dir}")
 
-    _write_status(data_dir, {"phase": "merge"})
-    _log("Merging LoRA into base…")
-    # merge: перезагрузка базы без 4bit если нужно
-    if use_4bit:
-        # для merge нужен fp16/fp32 base
-        del model
-        del trainer
+    # освободить VRAM/RAM до merge полной базы
+    del model
+    del trainer
+    import gc
+
+    gc.collect()
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        merge_model = AutoModelForCausalLM.from_pretrained(
-            model_src,
-            trust_remote_code=True,
-            torch_dtype=dtype,
-            device_map="cpu",
-        )
-        from peft import PeftModel
 
-        merge_model = PeftModel.from_pretrained(merge_model, str(adapter_dir))
-        merged = merge_model.merge_and_unload()
-    else:
-        merged = model.merge_and_unload()
-        # на GPU → CPU для сохранения
-        merged = merged.to("cpu")
-
-    merged.save_pretrained(str(ckpt_dir), safe_serialization=True)
-    tokenizer.save_pretrained(str(ckpt_dir))
-    _log(f"Checkpoint saved: {ckpt_dir}")
-
+    merge_meta = merge_adapter_to_checkpoint(
+        adapter_dir=adapter_dir,
+        ckpt_dir=ckpt_dir,
+        data_dir=data_dir,
+        tokenizer=tokenizer,
+    )
     return {
         "adapter_dir": str(adapter_dir),
         "checkpoint_dir": str(ckpt_dir),
         "use_4bit": use_4bit,
         "pairs": len(rows),
+        **{k: v for k, v in merge_meta.items() if k not in {"adapter_dir", "checkpoint_dir"}},
+    }
+
+
+def merge_adapter_to_checkpoint(
+    *,
+    adapter_dir: Path,
+    ckpt_dir: Path,
+    data_dir: Path,
+    tokenizer: Any | None = None,
+) -> dict[str, Any]:
+    """Слить LoRA в HF-базу на диске (по шардам), без полной загрузки 8B в RAM."""
+    import gc
+    import json
+    import re
+    import shutil
+
+    import torch
+    from huggingface_hub import snapshot_download
+    from peft import PeftConfig
+    from safetensors import safe_open
+    from safetensors.torch import save_file
+    from transformers import AutoTokenizer
+
+    adapter_dir = Path(adapter_dir)
+    ckpt_dir = Path(ckpt_dir)
+    if not (adapter_dir / "adapter_config.json").is_file():
+        raise RuntimeError(f"Нет adapter_config.json в {adapter_dir}")
+    adapter_weights = adapter_dir / "adapter_model.safetensors"
+    if not adapter_weights.is_file():
+        raise RuntimeError(f"Нет adapter_model.safetensors в {adapter_dir}")
+
+    _write_status(data_dir, {"phase": "merge", "adapter_dir": str(adapter_dir)})
+    _log("Merging LoRA on-disk (shard-by-shard, low RAM)…")
+    gc.collect()
+    try:
+        import torch as _t
+
+        if _t.cuda.is_available():
+            _t.cuda.empty_cache()
+    except Exception:
+        pass
+
+    peft_cfg = PeftConfig.from_pretrained(str(adapter_dir))
+    base_id = peft_cfg.base_model_name_or_path
+    if not base_id:
+        raise RuntimeError("В adapter_config нет base_model_name_or_path")
+    alpha = float(getattr(peft_cfg, "lora_alpha", 16) or 16)
+    rank = float(getattr(peft_cfg, "r", 8) or 8)
+    scale = alpha / rank
+    _log(f"base={base_id} alpha={alpha} r={rank} scale={scale}")
+
+    _log("Ensuring HF snapshot is local…")
+    snapshot = Path(
+        snapshot_download(
+            repo_id=str(base_id),
+            allow_patterns=[
+                "*.safetensors",
+                "*.json",
+                "*.txt",
+                "*.model",
+                "*.jinja",
+                "tokenizer*",
+                "vocab*",
+                "merges.txt",
+                "config.json",
+                "generation_config.json",
+                "*.py",
+            ],
+        )
+    )
+    _log(f"snapshot={snapshot}")
+
+    # LoRA tensors (маленькие, ~80 МБ)
+    lora_a: dict[str, torch.Tensor] = {}
+    lora_b: dict[str, torch.Tensor] = {}
+    with safe_open(str(adapter_weights), framework="pt", device="cpu") as f:
+        for key in f.keys():
+            # base_model.model.model.layers.N....lora_A.weight
+            m = re.match(
+                r"^base_model\.model\.(.+)\.lora_([AB])(?:\.default)?\.weight$",
+                key,
+            )
+            if not m:
+                continue
+            base_key = m.group(1) + ".weight"
+            tensor = f.get_tensor(key).to(torch.float32)
+            if m.group(2) == "A":
+                lora_a[base_key] = tensor
+            else:
+                lora_b[base_key] = tensor
+    targets = sorted(set(lora_a) & set(lora_b))
+    _log(f"LoRA target tensors: {len(targets)}")
+    if not targets:
+        raise RuntimeError("В adapter не найдены пары lora_A/lora_B")
+
+    index_path = snapshot / "model.safetensors.index.json"
+    single = snapshot / "model.safetensors"
+    if index_path.is_file():
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        weight_map: dict[str, str] = dict(index.get("weight_map") or {})
+        shards = sorted(set(weight_map.values()))
+    elif single.is_file():
+        with safe_open(str(single), framework="pt", device="cpu") as f:
+            keys = list(f.keys())
+        weight_map = {k: single.name for k in keys}
+        shards = [single.name]
+        index = {"metadata": {}, "weight_map": weight_map}
+    else:
+        raise RuntimeError(f"В snapshot нет model.safetensors: {snapshot}")
+
+    if ckpt_dir.exists():
+        shutil.rmtree(ckpt_dir, ignore_errors=True)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    # копируем конфиги токенизатора/модели
+    for name in (
+        "config.json",
+        "generation_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "vocab.json",
+        "merges.txt",
+        "chat_template.jinja",
+        "added_tokens.json",
+    ):
+        src = snapshot / name
+        if src.is_file():
+            shutil.copy2(src, ckpt_dir / name)
+    # из адаптера — актуальный tokenizer, если есть
+    for name in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
+        src = adapter_dir / name
+        if src.is_file():
+            shutil.copy2(src, ckpt_dir / name)
+
+    new_weight_map: dict[str, str] = {}
+    merged_count = 0
+    for shard_name in shards:
+        shard_path = snapshot / shard_name
+        _log(f"shard {shard_name}…")
+        out_tensors: dict[str, torch.Tensor] = {}
+        with safe_open(str(shard_path), framework="pt", device="cpu") as f:
+            for key in f.keys():
+                tensor = f.get_tensor(key)
+                if key in lora_a and key in lora_b:
+                    # W' = W + B @ A * scale
+                    w = tensor.to(torch.float32)
+                    a = lora_a[key]
+                    b = lora_b[key]
+                    delta = (b @ a) * scale
+                    if delta.shape != w.shape:
+                        raise RuntimeError(
+                            f"Shape mismatch for {key}: W{tuple(w.shape)} "
+                            f"delta{tuple(delta.shape)}"
+                        )
+                    tensor = (w + delta).to(torch.float16).contiguous()
+                    merged_count += 1
+                    del w, delta
+                elif tensor.dtype == torch.float32:
+                    # база может быть bf16/fp16; нормализуем крупные веса в fp16
+                    if tensor.ndim >= 2 and tensor.numel() > 1_000_000:
+                        tensor = tensor.to(torch.float16).contiguous()
+                out_tensors[key] = tensor
+                new_weight_map[key] = shard_name
+        out_path = ckpt_dir / shard_name
+        save_file(out_tensors, str(out_path))
+        del out_tensors
+        gc.collect()
+
+    # index
+    if len(shards) == 1 and shards[0] == "model.safetensors":
+        pass
+    else:
+        out_index = {
+            "metadata": (index.get("metadata") or {}),
+            "weight_map": new_weight_map,
+        }
+        (ckpt_dir / "model.safetensors.index.json").write_text(
+            json.dumps(out_index, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    missing = [k for k in targets if k not in new_weight_map]
+    if missing:
+        raise RuntimeError(
+            f"Не удалось применить LoRA к {len(missing)} ключам, "
+            f"пример: {missing[:3]}"
+        )
+
+    tok = tokenizer
+    if tok is None:
+        tok = AutoTokenizer.from_pretrained(str(adapter_dir), trust_remote_code=True)
+    tok.save_pretrained(str(ckpt_dir))
+
+    _log(f"Checkpoint saved: {ckpt_dir} (merged layers={merged_count})")
+    return {
+        "adapter_dir": str(adapter_dir),
+        "checkpoint_dir": str(ckpt_dir),
+        "merged": True,
+        "merged_tensors": merged_count,
+        "method": "on_disk_safetensors",
     }
 
 
@@ -470,18 +663,6 @@ def export_gguf(job: dict[str, Any], data_dir: Path, ckpt_dir: Path) -> dict[str
             "checkpoint": str(ckpt_dir),
         }
 
-    _log(f"Converting with {convert}")
-    cmd = [
-        sys.executable,
-        str(convert),
-        str(ckpt_dir),
-        "--outfile",
-        str(f16_path),
-        "--outtype",
-        "f16",
-    ]
-    subprocess.run(cmd, check=True)
-
     quant = os.environ.get("ZIPKA_LLAMA_QUANTIZE", "").strip()
     quant_bin = Path(quant) if quant else None
     if quant_bin is None or not quant_bin.is_file():
@@ -491,7 +672,21 @@ def export_gguf(job: dict[str, Any], data_dir: Path, ckpt_dir: Path) -> dict[str
                 quant_bin = Path(found)
                 break
 
-    if quant_bin and quant_bin.is_file() and f16_path.is_file():
+    # С quantize: HF → f16 → Q4_K_M. Без него: сразу q8_0 (меньше RAM/диска, чем f16).
+    if quant_bin and quant_bin.is_file():
+        _log(f"Converting with {convert} → f16")
+        subprocess.run(
+            [
+                sys.executable,
+                str(convert),
+                str(ckpt_dir),
+                "--outfile",
+                str(f16_path),
+                "--outtype",
+                "f16",
+            ],
+            check=True,
+        )
         _log(f"Quantizing → Q4_K_M via {quant_bin}")
         subprocess.run(
             [str(quant_bin), str(f16_path), str(out_path), "Q4_K_M"],
@@ -501,21 +696,42 @@ def export_gguf(job: dict[str, Any], data_dir: Path, ckpt_dir: Path) -> dict[str
             f16_path.unlink()
         except OSError:
             pass
-    elif f16_path.is_file():
-        # без quantize оставляем f16 под целевым именем
-        target = models_dir / (Path(out_name).stem.replace(".Q4_K_M", "") + ".f16.gguf")
-        if out_path.suffix == ".gguf" and "Q4" in out_name:
-            shutil.move(str(f16_path), str(target))
+    else:
+        q8_name = Path(out_name).name
+        if "Q4_K_M" in q8_name:
+            q8_name = q8_name.replace("Q4_K_M", "Q8_0")
+        elif q8_name.endswith(".gguf"):
+            q8_name = q8_name[:-5] + ".Q8_0.gguf"
+        q8_path = models_dir / q8_name
+        _log(f"Converting with {convert} → q8_0 (no llama-quantize)")
+        subprocess.run(
+            [
+                sys.executable,
+                str(convert),
+                str(ckpt_dir),
+                "--outfile",
+                str(q8_path),
+                "--outtype",
+                "q8_0",
+            ],
+            check=True,
+        )
+        if q8_path.is_file():
             return {
                 "ok": True,
-                "gguf": target.name,
+                "gguf": q8_path.name,
                 "hint": (
-                    "Экспорт f16 без quantize. Поставь llama-quantize в PATH "
-                    "или ZIPKA_LLAMA_QUANTIZE для Q4_K_M."
+                    "Экспорт Q8_0 без llama-quantize. "
+                    "Для Q4_K_M собери llama-quantize и задай ZIPKA_LLAMA_QUANTIZE."
                 ),
                 "checkpoint": str(ckpt_dir),
             }
-        shutil.move(str(f16_path), str(out_path))
+        return {
+            "ok": False,
+            "gguf": "",
+            "hint": "convert q8_0 прошёл, но выходной GGUF не найден",
+            "checkpoint": str(ckpt_dir),
+        }
 
     if not out_path.is_file():
         return {
@@ -541,12 +757,72 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Только HF→GGUF из checkpoint_dir джоба",
     )
+    parser.add_argument(
+        "--merge-only",
+        action="store_true",
+        help="Только merge уже сохранённого LoRA-адаптера → checkpoint (после OOM на merge)",
+    )
     args = parser.parse_args(argv)
     job_path = Path(args.job)
     data_dir = Path(args.data_dir)
     job = json.loads(job_path.read_text(encoding="utf-8"))
 
     try:
+        if args.merge_only:
+            adapter = Path(job["adapter_dir"])
+            ckpt = Path(job["checkpoint_dir"])
+            train_meta = merge_adapter_to_checkpoint(
+                adapter_dir=adapter,
+                ckpt_dir=ckpt,
+                data_dir=data_dir,
+            )
+            job["train"] = {**(job.get("train") or {}), **train_meta}
+            export = export_gguf(job, data_dir, ckpt)
+            job["export"] = export
+            job["status"] = "succeeded"
+            job.pop("error", None)
+            if export.get("ok") and export.get("gguf"):
+                job["export_gguf_name"] = export["gguf"]
+            elif not export.get("ok"):
+                job["export_warning"] = export.get("hint")
+            _write_job(job_path, job)
+            _write_status(
+                data_dir,
+                {
+                    "state": "succeeded_pending_apply",
+                    "phase": "finished",
+                    "job_id": job.get("id"),
+                    "export": export,
+                    "job_path": str(job_path),
+                    "error": None,
+                },
+            )
+            try:
+                from zipka.config import Settings
+                from zipka.evolve.finetune import FinetuneEvolve
+                from zipka.memory.store import MemoryStore
+
+                settings = Settings(zipka_data_dir=str(data_dir))
+                ft = FinetuneEvolve(MemoryStore(settings), settings)
+                meta = ft.apply_success_from_job(job)
+                _write_status(
+                    data_dir,
+                    {
+                        "state": "done",
+                        "phase": "applied",
+                        "result": meta,
+                        "export": export,
+                        "job_id": job.get("id"),
+                        "job_path": str(job_path),
+                        "error": None,
+                    },
+                )
+                _log(f"Applied lineage: {meta}")
+            except Exception as exc:
+                _log(f"Lineage apply warning: {exc}")
+                traceback.print_exc()
+            return 0
+
         if args.export_only:
             ckpt = Path(job["checkpoint_dir"])
             if not ckpt.is_dir():
@@ -556,6 +832,7 @@ def main(argv: list[str] | None = None) -> int:
             if export.get("ok") and export.get("gguf"):
                 job["export_gguf_name"] = export["gguf"]
                 job["status"] = "succeeded"
+                job.pop("error", None)
             else:
                 job["status"] = "failed"
                 job["error"] = export.get("hint") or "export failed"
@@ -566,8 +843,32 @@ def main(argv: list[str] | None = None) -> int:
                     "state": "done" if job["status"] == "succeeded" else "failed",
                     "phase": "export_only",
                     "result": export,
+                    "error": None if job["status"] == "succeeded" else job.get("error"),
                 },
             )
+            if job["status"] == "succeeded":
+                try:
+                    from zipka.config import Settings
+                    from zipka.evolve.finetune import FinetuneEvolve
+                    from zipka.memory.store import MemoryStore
+
+                    settings = Settings(zipka_data_dir=str(data_dir))
+                    ft = FinetuneEvolve(MemoryStore(settings), settings)
+                    meta = ft.apply_success_from_job(job)
+                    _write_status(
+                        data_dir,
+                        {
+                            "state": "done",
+                            "phase": "applied",
+                            "result": meta,
+                            "export": export,
+                            "error": None,
+                        },
+                    )
+                    _log(f"Applied lineage: {meta}")
+                except Exception as exc:
+                    _log(f"Lineage apply warning: {exc}")
+                    traceback.print_exc()
             return 0 if job["status"] == "succeeded" else 1
 
         train_meta = train_lora(job, data_dir)
@@ -589,6 +890,7 @@ def main(argv: list[str] | None = None) -> int:
                 "job_id": job.get("id"),
                 "export": export,
                 "job_path": str(job_path),
+                "error": None,
             },
         )
         # применить lineage из воркера
@@ -609,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
                     "export": export,
                     "job_id": job.get("id"),
                     "job_path": str(job_path),
+                    "error": None,
                 },
             )
             _log(f"Applied lineage: {meta}")
@@ -618,17 +921,32 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except Exception as exc:
         traceback.print_exc()
+        err = _exc_text(exc)
         job["status"] = "failed"
-        job["error"] = str(exc)
+        job["error"] = err
+        # если адаптер уже есть — подсказка дожать merge без переобучения
+        adapter = Path(job.get("adapter_dir") or "")
+        if (adapter / "adapter_config.json").is_file():
+            job["error"] = (
+                err
+                + f"\nАдаптер уже сохранён ({adapter}). "
+                "Дожми merge без переобучения:\n"
+                f'  python -m zipka.evolve.finetune_worker --merge-only '
+                f'--job "{job_path}" --data-dir "{data_dir}"'
+            )
+        from datetime import datetime, timezone
+
         _write_job(job_path, job)
         _write_status(
             data_dir,
             {
                 "state": "failed",
                 "phase": "error",
-                "error": str(exc),
+                "error": job["error"],
                 "job_id": job.get("id"),
                 "job_path": str(job_path),
+                "started_at": job.get("started_at"),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
             },
         )
         return 1

@@ -10,5 +10,7 @@
 | `books/` | uploads, extracted, digests |
 | `snapshots/` | кадры камеры |
 | `patches/` | hard-evolve бэкапы |
+| `finetune/` | LoRA/adapters/checkpoints (тяжёлые, только локально) |
+| `models/*.gguf` | локальные GGUF для чата |
 
-В репозитории хранится только этот README и `persona/persona.example.yaml`.
+В репозитории хранится только этот README, `persona/persona.example.yaml`, `models/README.md`, `finetune/README.md` и лёгкие конфиги (`news/sources.json`, `settings/runtime.json`).
