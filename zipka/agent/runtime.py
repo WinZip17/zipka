@@ -28,6 +28,7 @@ from zipka.runtime_settings import compute_status, save_runtime
 from zipka.safety.policy import SafetyPolicy
 from zipka.sensors.ears import Ears
 from zipka.sensors.eyes import Eyes
+from zipka.sensors.feature import force_sensors_off, sensors_feature_enabled
 
 
 def is_finetune_busy(agent: Any) -> bool:
@@ -143,6 +144,7 @@ def status(agent: Any) -> dict[str, Any]:
         "vision": vision_status(agent.settings),
         "eyes": agent.eyes.enabled,
         "ears": agent.ears.enabled,
+        "sensors_enabled": sensors_feature_enabled(agent.settings),
         "pending_patch": agent.hard.has_pending(),
         "approve_phrase": APPROVE_PHRASE,
         "pending_soft": agent.soft.has_pending(),
@@ -264,4 +266,18 @@ def set_soft_evolve_from_dialogue(agent: Any, enabled: bool) -> dict[str, Any]:
     return {
         "ok": True,
         "soft_evolve_from_dialogue": agent.soft.dialogue_enabled(),
+    }
+
+
+def set_sensors_enabled(agent: Any, enabled: bool) -> dict[str, Any]:
+    """Master-switch сенсоров. При выкл — принудительно гасим глаза/уши."""
+    on = bool(enabled)
+    save_runtime({"sensors_enabled": on}, agent.settings)
+    if not on:
+        force_sensors_off(agent)
+    return {
+        "ok": True,
+        "sensors_enabled": sensors_feature_enabled(agent.settings),
+        "eyes": bool(getattr(agent.eyes, "enabled", False)),
+        "ears": bool(getattr(agent.ears, "enabled", False)),
     }

@@ -203,13 +203,18 @@ def eyes(
     ),
 ) -> None:
     """Глаза: on/off, snap (камера), screen (монитор), window (активное окно)."""
+    from zipka.sensors.feature import refuse_sensors, sensors_feature_enabled
+
     z = _agent()
     action = action.lower()
-    if action == "on":
-        console.print(z.eyes.on())
-        return
     if action == "off":
         console.print(z.eyes.off())
+        return
+    if not sensors_feature_enabled(z.settings):
+        console.print(refuse_sensors("eyes" if action == "on" else "look"))
+        raise typer.Exit(code=1)
+    if action == "on":
+        console.print(z.eyes.on())
         return
 
     capture = {
@@ -245,12 +250,18 @@ def ears(
     seconds: float = typer.Option(5.0, help="Длительность записи"),
 ) -> None:
     """Уши: on / off / listen."""
+    from zipka.sensors.feature import refuse_sensors, sensors_feature_enabled
+
     z = _agent()
     action = action.lower()
+    if action == "off":
+        console.print(z.ears.off())
+        return
+    if not sensors_feature_enabled(z.settings):
+        console.print(refuse_sensors("ears" if action == "on" else "listen"))
+        raise typer.Exit(code=1)
     if action == "on":
         console.print(z.ears.on())
-    elif action == "off":
-        console.print(z.ears.off())
     elif action == "listen":
         console.print(f"Слушаю {seconds} сек...")
         text = z.ears.listen(seconds=seconds)

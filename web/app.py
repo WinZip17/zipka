@@ -124,6 +124,10 @@ class SoftEvolveDialogueIn(BaseModel):
     enabled: bool
 
 
+class SensorsEnabledIn(BaseModel):
+    enabled: bool
+
+
 def _spa_index() -> Path:
     index = DIST / "index.html"
     if not index.exists():
@@ -210,6 +214,34 @@ def api_set_soft_evolve_dialogue(body: SoftEvolveDialogueIn) -> dict:
         ) from exc
 
 
+@app.get("/api/settings/sensors")
+def api_get_sensors_feature() -> dict:
+    from zipka.sensors.feature import sensors_feature_enabled
+
+    return {
+        "enabled": sensors_feature_enabled(),
+        "eyes": agent.eyes.enabled,
+        "ears": agent.ears.enabled,
+    }
+
+
+@app.post("/api/settings/sensors")
+def api_set_sensors_feature(body: SensorsEnabledIn) -> dict:
+    try:
+        return agent.set_sensors_enabled(body.enabled)
+    except Exception as exc:
+        raise HTTPException(
+            400, f"Не удалось сохранить сенсоры: {exc}"
+        ) from exc
+
+
+def _ensure_sensors_feature(*, kind: str = "sensors") -> None:
+    from zipka.sensors.feature import refuse_sensors, sensors_feature_enabled
+
+    if not sensors_feature_enabled():
+        raise HTTPException(403, refuse_sensors(kind))  # type: ignore[arg-type]
+
+
 @app.post("/api/chat")
 def api_chat(body: ChatIn) -> dict:
     reply = agent.chat(
@@ -229,11 +261,12 @@ def api_chat_history(limit: int = 30, before: int | None = None) -> dict:
 @app.post("/api/eyes")
 def api_eyes(body: ActionIn) -> dict:
     action = body.action.lower()
+    if action == "off":
+        return {"ok": True, "message": agent.eyes.off()}
+    _ensure_sensors_feature(kind="eyes" if action == "on" else "look")
     try:
         if action == "on":
             return {"ok": True, "message": agent.eyes.on()}
-        if action == "off":
-            return {"ok": True, "message": agent.eyes.off()}
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -272,11 +305,13 @@ def api_eyes(body: ActionIn) -> dict:
 @app.post("/api/ears")
 def api_ears(body: ActionIn) -> dict:
     action = body.action.lower()
-    if action == "on":
-        return {"ok": True, "message": agent.ears.on()}
     if action == "off":
         return {"ok": True, "message": agent.ears.off()}
+    if action == "on":
+        _ensure_sensors_feature(kind="ears")
+        return {"ok": True, "message": agent.ears.on()}
     if action == "listen":
+        _ensure_sensors_feature(kind="listen")
         _ensure_not_finetuning()
         text = agent.ears.listen(seconds=body.seconds)
         comment = agent.comment_ears(text)

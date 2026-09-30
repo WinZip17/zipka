@@ -113,6 +113,9 @@ class Zipka:
     def set_soft_evolve_from_dialogue(self, enabled: bool) -> dict[str, Any]:
         return runtime.set_soft_evolve_from_dialogue(self, enabled)
 
+    def set_sensors_enabled(self, enabled: bool) -> dict[str, Any]:
+        return runtime.set_sensors_enabled(self, enabled)
+
     # --- prompting / chat ---
 
     def build_messages(

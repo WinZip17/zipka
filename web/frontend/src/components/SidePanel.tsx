@@ -52,6 +52,7 @@ import {
   setModels,
   setNewsSchedule,
   setSoftEvolveDialogue,
+  setSensorsEnabled,
   startFinetune,
   type FinetuneStatusResponse,
   type NewsIntervalOption,
@@ -203,6 +204,11 @@ export function SidePanel({
   const [softDialogue, setSoftDialogue] = useState(false);
   const [softDialogueBusy, setSoftDialogueBusy] = useState(false);
   const [softDialogueMsg, setSoftDialogueMsg] = useState<string | null>(null);
+  const [sensorsFeature, setSensorsFeature] = useState(false);
+  const [sensorsFeatureBusy, setSensorsFeatureBusy] = useState(false);
+  const [sensorsFeatureMsg, setSensorsFeatureMsg] = useState<string | null>(
+    null,
+  );
   const [finetuneBusy, setFinetuneBusy] = useState(false);
   const [finetuneMsg, setFinetuneMsg] = useState<string | null>(null);
   const [finetuneInfo, setFinetuneInfo] = useState<FinetuneStatusResponse | null>(
@@ -270,6 +276,12 @@ export function SidePanel({
       setSoftDialogue(status.soft_evolve_from_dialogue);
     }
   }, [status?.soft_evolve_from_dialogue]);
+
+  useEffect(() => {
+    if (typeof status?.sensors_enabled === "boolean") {
+      setSensorsFeature(status.sensors_enabled);
+    }
+  }, [status?.sensors_enabled]);
 
   useEffect(() => {
     const roles = status?.chat_models || status?.model_roles;
@@ -608,6 +620,27 @@ export function SidePanel({
     }
   };
 
+  const applySensorsFeature = async (enabled: boolean) => {
+    setSensorsFeatureBusy(true);
+    setSensorsFeatureMsg(null);
+    setSensorsFeature(enabled);
+    try {
+      const data = await setSensorsEnabled(enabled);
+      setSensorsFeature(Boolean(data.sensors_enabled));
+      setSensorsFeatureMsg(
+        data.sensors_enabled
+          ? "Сенсоры разрешены: блок появится на главной, глаза/уши по умолчанию выкл."
+          : "Сенсоры выключены: блок скрыт, глаза и уши погашены.",
+      );
+      onRefresh();
+    } catch (err) {
+      setSensorsFeature(!enabled);
+      setSensorsFeatureMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSensorsFeatureBusy(false);
+    }
+  };
+
   const applyModels = async () => {
     setModelsBusy(true);
     setModelsMsg(null);
@@ -681,7 +714,12 @@ export function SidePanel({
   };
 
   const toggleEars = async () => {
-    await earsAction(earsOn ? "off" : "on");
+    try {
+      const data = await earsAction(earsOn ? "off" : "on");
+      if (data.message) onBubble(data.message, "bot");
+    } catch (err) {
+      onBubble(err instanceof Error ? err.message : String(err), "bot");
+    }
     onRefresh();
   };
 
@@ -845,91 +883,117 @@ export function SidePanel({
         </Stack>
       </Stack>
 
-      <SectionTitle>Сенсоры</SectionTitle>
-      <Stack direction="row" spacing={0.75} useFlexGap sx={{ mb: 1, flexWrap: "wrap" }}>
-        <Tooltip
-          title={
-            eyesOn
-              ? "Выключить глаза — камера освободится"
-              : "Включить глаза: откроется веб-камера"
-          }
-          arrow
-          enterDelay={400}
-        >
-          <span>
-            <Button
-              size="small"
-              variant={eyesOn ? "contained" : "outlined"}
-              disabled={busy}
-              onClick={() => void toggleEyes()}
-              sx={sensorBtnSx(eyesOn)}
+      {sensorsFeature ? (
+        <>
+          <SectionTitle>Сенсоры</SectionTitle>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            useFlexGap
+            sx={{ mb: 1, flexWrap: "wrap" }}
+          >
+            <Tooltip
+              title={
+                eyesOn
+                  ? "Выключить глаза — камера освободится"
+                  : "Включить глаза: откроется веб-камера"
+              }
+              arrow
+              enterDelay={400}
             >
-              Глаза
-            </Button>
-          </span>
-        </Tooltip>
-        {(
-          [
-            ["snap", "Камера", "Сделать снимок с веб-камеры и описать, что видно"],
-            ["screen", "Экран", "Снять весь монитор и описать содержимое экрана"],
-            ["window", "Окно", "Снять активное окно приложения и описать его"],
-          ] as const
-        ).map(([action, label, tip]) => (
-          <Tooltip key={action} title={tip} arrow enterDelay={400}>
-            <span>
-              <Button
-                size="small"
-                variant="outlined"
-                disabled={busy}
-                onClick={() => void eyeCapture(action)}
-                sx={sensorBtnSx(false)}
-              >
-                {label}
-              </Button>
-            </span>
-          </Tooltip>
-        ))}
-      </Stack>
-      <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
-        <Tooltip
-          title={
-            earsOn
-              ? "Выключить уши — микрофон не используется"
-              : "Включить уши: Зипка может слушать"
-          }
-          arrow
-          enterDelay={400}
-        >
-          <span>
-            <Button
-              size="small"
-              variant={earsOn ? "contained" : "outlined"}
-              disabled={busy}
-              onClick={() => void toggleEars()}
-              sx={sensorBtnSx(earsOn)}
+              <span>
+                <Button
+                  size="small"
+                  variant={eyesOn ? "contained" : "outlined"}
+                  disabled={busy}
+                  onClick={() => void toggleEyes()}
+                  sx={sensorBtnSx(eyesOn)}
+                >
+                  Глаза
+                </Button>
+              </span>
+            </Tooltip>
+            {(
+              [
+                [
+                  "snap",
+                  "Камера",
+                  "Сделать снимок с веб-камеры и описать, что видно",
+                ],
+                [
+                  "screen",
+                  "Экран",
+                  "Снять весь монитор и описать содержимое экрана",
+                ],
+                [
+                  "window",
+                  "Окно",
+                  "Снять активное окно приложения и описать его",
+                ],
+              ] as const
+            ).map(([action, label, tip]) => (
+              <Tooltip key={action} title={tip} arrow enterDelay={400}>
+                <span>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={busy}
+                    onClick={() => void eyeCapture(action)}
+                    sx={sensorBtnSx(false)}
+                  >
+                    {label}
+                  </Button>
+                </span>
+              </Tooltip>
+            ))}
+          </Stack>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            useFlexGap
+            sx={{ flexWrap: "wrap" }}
+          >
+            <Tooltip
+              title={
+                earsOn
+                  ? "Выключить уши — микрофон не используется"
+                  : "Включить уши: Зипка может слушать"
+              }
+              arrow
+              enterDelay={400}
             >
-              Уши
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip
-          title="Записать несколько секунд с микрофона, распознать речь и ответить"
-          arrow
-          enterDelay={400}
-        >
-          <span>
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={busy}
-              onClick={() => void earListen()}
-              sx={sensorBtnSx(false)}
+              <span>
+                <Button
+                  size="small"
+                  variant={earsOn ? "contained" : "outlined"}
+                  disabled={busy}
+                  onClick={() => void toggleEars()}
+                  sx={sensorBtnSx(earsOn)}
+                >
+                  Уши
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip
+              title="Записать несколько секунд с микрофона, распознать речь и ответить"
+              arrow
+              enterDelay={400}
             >
-              Слушать
-            </Button>
-          </span>
-        </Tooltip>
-      </Stack>
+              <span>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={busy}
+                  onClick={() => void earListen()}
+                  sx={sensorBtnSx(false)}
+                >
+                  Слушать
+                </Button>
+              </span>
+            </Tooltip>
+          </Stack>
+        </>
+      ) : null}
 
       <SectionTitle>Патч</SectionTitle>
       <Box
@@ -1259,8 +1323,20 @@ export function SidePanel({
           </InfoBlock>
 
           <InfoBlock title="Сенсоры">
-            <InfoLine label="Глаза" value={eyesOn ? "вкл" : "выкл"} />
-            <InfoLine label="Уши" value={earsOn ? "вкл" : "выкл"} />
+            <InfoLine
+              label="В настройках"
+              value={sensorsFeature ? "разрешены" : "выкл"}
+            />
+            {sensorsFeature ? (
+              <>
+                <InfoLine label="Глаза" value={eyesOn ? "вкл" : "выкл"} />
+                <InfoLine label="Уши" value={earsOn ? "вкл" : "выкл"} />
+              </>
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                Блок на главной скрыт. Включи «Сенсоры» в Настройках → Модели.
+              </Typography>
+            )}
           </InfoBlock>
 
           <InfoBlock title="Патчи кода">
@@ -1577,6 +1653,43 @@ export function SidePanel({
                   sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
                 >
                   {softDialogueMsg}
+                </Typography>
+              )}
+
+              <Typography
+                variant="subtitle2"
+                color="text.secondary"
+                sx={{ mt: 2, mb: 1, fontWeight: 700 }}
+              >
+                Сенсоры
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={sensorsFeature}
+                    disabled={busy || sensorsFeatureBusy || finetuneRunning}
+                    onChange={(_e, checked) => void applySensorsFeature(checked)}
+                  />
+                }
+                label="Разрешить сенсоры"
+                sx={{ mb: 0.5, ml: 0 }}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mb: 1 }}
+              >
+                Master-switch для глаз и ушей. Выкл — блока «Сенсоры» на главной
+                нет, камера/микрофон погашены. Вкл — блок появляется, сенсоры по
+                умолчанию выключены (включаются кнопками или фразой).
+              </Typography>
+              {sensorsFeatureMsg && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+                >
+                  {sensorsFeatureMsg}
                 </Typography>
               )}
               <Accordion

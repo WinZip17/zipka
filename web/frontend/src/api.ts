@@ -155,6 +155,7 @@ export type StatusResponse = {
   pending_soft?: boolean;
   soft_approve_phrase?: string;
   soft_evolve_from_dialogue?: boolean;
+  sensors_enabled?: boolean;
   finetune?: {
     state?: string;
     job_id?: string;
@@ -289,13 +290,20 @@ export async function earsAction(action: string, seconds = 5) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, seconds }),
   });
-  return parseJson<{
+  const data = await parseJson<{
     heard?: string;
     comment?: string;
     reply?: string;
     message?: string;
     detail?: string;
   }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "Ошибка ушей",
+    );
+  }
+  return data;
 }
 
 export async function approvePatch() {
@@ -423,6 +431,28 @@ export async function setSoftEvolveDialogue(enabled: boolean) {
       typeof detail === "string"
         ? detail
         : "Не удалось сохранить soft-evolve",
+    );
+  }
+  return data;
+}
+
+export async function setSensorsEnabled(enabled: boolean) {
+  const res = await fetch("/api/settings/sensors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    sensors_enabled?: boolean;
+    eyes?: boolean;
+    ears?: boolean;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "Не удалось сохранить сенсоры",
     );
   }
   return data;

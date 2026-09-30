@@ -161,10 +161,52 @@ def voice_look(agent: Any, desc: str, *, where: str, user_text: str) -> str:
 
 def try_look_from_message(agent: Any, text: str) -> str | None:
     """Если просят посмотреть — кадр + Moondream/Ollama, ответ от лица Зипки."""
+    from zipka.sensors.feature import (
+        detect_sensor_chat_intent,
+        refuse_sensors,
+        sensors_feature_enabled,
+    )
+
     source = look_source(text)
+    feature_on = sensors_feature_enabled(agent.settings)
+
     if source is None:
         low = text.lower()
+        # уши / общий сенсор из чата
+        kind = detect_sensor_chat_intent(text)
+        if kind in {"ears", "listen", "sensors"}:
+            if not feature_on:
+                return refuse_sensors(kind)
+            if kind == "ears":
+                try:
+                    return agent.ears.on()
+                except Exception as exc:
+                    return f"Не смогла включить уши: {exc}"
+            if kind == "listen":
+                if not agent.ears.enabled:
+                    try:
+                        agent.ears.on()
+                    except Exception as exc:
+                        return f"Не смогла включить уши: {exc}"
+                try:
+                    heard = agent.ears.listen(seconds=5.0)
+                except Exception as exc:
+                    return f"Не смогла послушать: {exc}"
+                comment = comment_ears(agent, heard)
+                reply = f"Услышала: {heard}"
+                if comment:
+                    reply += f"\n\n{comment}"
+                return reply
+            # kind == sensors, feature уже on
+            return (
+                "Сенсоры в Настройках уже разрешены. "
+                "Дальше — «Глаза» или «Уши» на главной, "
+                "либо скажи «включи глаза» / «включи уши»."
+            )
+
         if re.search(r"(?i)включ\w*\s+глаз|eyes\s+on|открой\s+камер", low):
+            if not feature_on:
+                return refuse_sensors("eyes")
             try:
                 return agent.eyes.on()
             except Exception as exc:
@@ -174,7 +216,15 @@ def try_look_from_message(agent: Any, text: str) -> str | None:
                 return agent.eyes.off()
             except Exception as exc:
                 return f"Не смогла выключить глаза: {exc}"
+        if re.search(r"(?i)выключ\w*\s+уш|ears\s+off|закрой\s+микрофон", low):
+            try:
+                return agent.ears.off()
+            except Exception as exc:
+                return f"Не смогла выключить уши: {exc}"
         return None
+
+    if not feature_on:
+        return refuse_sensors("look")
 
     if not agent.eyes.enabled:
         try:
