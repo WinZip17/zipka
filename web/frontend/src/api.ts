@@ -307,11 +307,12 @@ export async function earsAction(action: string, seconds = 5) {
     reply?: string;
     message?: string;
     detail?: string;
+    recording?: boolean;
+    skipped_chat?: boolean;
   }>(res);
   if (!res.ok) {
-    const detail = data.detail;
     throw new Error(
-      typeof detail === "string" ? detail : "Ошибка ушей",
+      typeof data.detail === "string" ? data.detail : data.message || "ears failed",
     );
   }
   return data;

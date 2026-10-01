@@ -311,10 +311,29 @@ def api_ears(body: ActionIn) -> dict:
     if action == "on":
         _ensure_sensors_feature(kind="ears")
         return {"ok": True, "message": agent.ears.on()}
-    if action == "listen":
+    if action in {"listen_start", "start"}:
         _ensure_sensors_feature(kind="listen")
         _ensure_not_finetuning()
-        text = agent.ears.listen(seconds=body.seconds)
+        try:
+            msg = agent.ears.listen_start()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True, "message": msg, "recording": True}
+    if action in {"listen_stop", "stop"}:
+        _ensure_sensors_feature(kind="listen")
+        _ensure_not_finetuning()
+        try:
+            text = agent.ears.listen_stop()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if text in {"(тишина)", "(слишком коротко)"}:
+            return {
+                "ok": True,
+                "heard": text,
+                "comment": None,
+                "reply": None,
+                "skipped_chat": True,
+            }
         comment = agent.comment_ears(text)
         reply = agent.chat(text)
         return {
@@ -323,7 +342,31 @@ def api_ears(body: ActionIn) -> dict:
             "comment": comment,
             "reply": reply,
         }
-    raise HTTPException(400, "action must be on|off|listen")
+    if action == "listen":
+        # CLI / старый клиент: фиксированные N секунд
+        _ensure_sensors_feature(kind="listen")
+        _ensure_not_finetuning()
+        try:
+            text = agent.ears.listen(seconds=body.seconds)
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if text in {"(тишина)", "(слишком коротко)"}:
+            return {
+                "ok": True,
+                "heard": text,
+                "comment": None,
+                "reply": None,
+                "skipped_chat": True,
+            }
+        comment = agent.comment_ears(text)
+        reply = agent.chat(text)
+        return {
+            "ok": True,
+            "heard": text,
+            "comment": comment,
+            "reply": reply,
+        }
+    raise HTTPException(400, "action must be on|off|listen|listen_start|listen_stop")
 
 
 @app.post("/api/learn")

@@ -138,14 +138,14 @@ def handle_llm_reply(agent: Any, ctx: ChatCtx) -> str | None:
         return str(exc)
 
     try:
-        from zipka.llm.sanitize import strip_repeated_paren_closers
+        from zipka.llm.sanitize import sanitize_chat_reply
 
         recent_asst = [
             m.get("content") or ""
             for m in agent.memory.recent_chat(limit=12)
             if (m.get("role") or "") == "assistant"
         ]
-        reply = strip_repeated_paren_closers(reply, recent_asst)
+        reply = sanitize_chat_reply(reply, recent_asst)
     except Exception:
         pass
 

@@ -339,3 +339,66 @@ def strip_repeated_paren_closers(
         if _norm_closer(prev_c) == norm:
             return _TRAILING_PARENS_RE.sub("", raw).rstrip()
     return raw
+
+
+# Стартовая мантра «Я Зипка — не агент…» (роль из промпта, не для озвучки)
+_IDENTITY_OPENER_RE = re.compile(
+    r"(?is)^\s*"
+    r"(?:"
+    r"я\s*(?:—|-)?\s*зипка\s*[—,\-:]\s*не\s+(?:локальный\s+)?агент"
+    r"|я\s*(?:—|-)?\s*зипка\b[^.!?\n]{0,60}?\bне\s+"
+    r"(?:локальный\s+)?(?:агент|ассистент|бот|ии[- ]?помощник)"
+    r"|я\s+не\s+(?:локальный\s+)?(?:агент|ассистент|бот)\b"
+    r"[^.!?\n]{0,40}?\bзипка"
+    r")"
+    r"[^.!?\n]{0,160}[.!?…]?\s*",
+)
+
+
+def strip_identity_mantra_opener(
+    text: str,
+    recent_assistant: list[str] | None = None,
+) -> str:
+    """Срезать стартовое «Я Зипка — не агент…», особенно при повторе из истории."""
+    raw = (text or "").lstrip()
+    if not raw:
+        return text or ""
+
+    m = _IDENTITY_OPENER_RE.match(raw)
+    if not m:
+        return text or ""
+
+    opener = m.group(0)
+    rest = raw[m.end() :].lstrip()
+    if not rest:
+        return raw  # не оставлять пустым
+
+    # Всегда режем явную мантру; дополнительно — если такой же зачин уже был
+    recent_hit = False
+    norm = _norm_closer(opener)
+    for prev in recent_assistant or []:
+        pm = _IDENTITY_OPENER_RE.match((prev or "").lstrip())
+        if pm and _norm_closer(pm.group(0)) == norm:
+            recent_hit = True
+            break
+        if norm and norm[:40] in _norm_closer((prev or "")[:180]):
+            recent_hit = True
+            break
+
+    # Мантра «я зипка — не агент» почти никогда не нужна как зачин
+    if recent_hit or re.search(
+        r"(?i)не\s+(?:локальный\s+)?агент|не\s+ассистент|не\s+бот", opener
+    ):
+        return rest
+    return text or ""
+
+
+def sanitize_chat_reply(
+    text: str,
+    recent_assistant: list[str] | None = None,
+) -> str:
+    """Лёгкая чистка залипаний модели перед записью в историю."""
+    out = text or ""
+    out = strip_identity_mantra_opener(out, recent_assistant)
+    out = strip_repeated_paren_closers(out, recent_assistant)
+    return out

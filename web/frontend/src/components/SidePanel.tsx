@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, PointerEvent } from "react";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import SettingsIcon from "@mui/icons-material/Settings";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
@@ -74,6 +74,12 @@ export function SidePanel({
   const [edits, setEdits] = useState(false);
   const [learnQ, setLearnQ] = useState("");
   const [sensorsFeature, setSensorsFeature] = useState(false);
+  const [earPhase, setEarPhase] = useState<
+    "idle" | "recording" | "transcribing" | "replying"
+  >("idle");
+  const earSessionRef = useRef(false);
+  const earServerStartedRef = useRef(false);
+  const earBusyRef = useRef(false);
 
   const finetuneRunning = status?.finetune?.state === "running";
   // Пока идёт дообучение — блокируем остальные действия в панели
@@ -153,16 +159,76 @@ export function SidePanel({
     });
   };
 
-  const earListen = async () => {
-    await withBusy("Слушаю…", async () => {
-      const data = await earsAction("listen");
+  const stopEarSession = async () => {
+    if (earBusyRef.current) return;
+    earBusyRef.current = true;
+    setEarPhase("transcribing");
+    onBusy(true);
+    onThinking("Распознаю речь…");
+    try {
+      const data = await earsAction("listen_stop");
       if (data.heard) onBubble(`(уши) ${data.heard}`, "user");
+      if (data.skipped_chat) {
+        if (data.heard === "(слишком коротко)") {
+          onBubble("Слишком коротко — зажми «Слушать» и говори дольше.", "bot");
+        }
+        return;
+      }
+      setEarPhase("replying");
+      onThinking("Вникаю…");
       if (data.comment) onBubble(data.comment, "bot");
-      if (data.reply) onBubble(data.reply, "bot");
-      else if (data.detail) onBubble(data.detail, "bot");
+      if (data.reply) {
+        onBubble(data.reply, "bot");
+        playReplySound();
+      } else if (data.detail) onBubble(String(data.detail), "bot");
       else if (data.message) onBubble(data.message, "bot");
       onRefresh();
-    });
+    } catch (err) {
+      onBubble(err instanceof Error ? err.message : String(err), "bot");
+    } finally {
+      earBusyRef.current = false;
+      earServerStartedRef.current = false;
+      setEarPhase("idle");
+      onThinking(null);
+      onBusy(false);
+    }
+  };
+
+  const startEarHold = async (e: PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    if (busy || !earsOn || earSessionRef.current || earBusyRef.current) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    earSessionRef.current = true;
+    earServerStartedRef.current = false;
+    setEarPhase("recording");
+    onThinking("● Запись… говори");
+    try {
+      await earsAction("listen_start");
+      earServerStartedRef.current = true;
+    } catch (err) {
+      earSessionRef.current = false;
+      earServerStartedRef.current = false;
+      setEarPhase("idle");
+      onThinking(null);
+      onBubble(err instanceof Error ? err.message : String(err), "bot");
+      return;
+    }
+    // уже отпустили, пока поднимали микрофон
+    if (!earSessionRef.current) {
+      await stopEarSession();
+    }
+  };
+
+  const endEarHold = () => {
+    if (!earSessionRef.current) return;
+    earSessionRef.current = false;
+    if (earServerStartedRef.current) {
+      void stopEarSession();
+    }
   };
 
   const onStudy = async (e: FormEvent) => {
@@ -354,19 +420,62 @@ export function SidePanel({
               </span>
             </Tooltip>
             <Tooltip
-              title="Записать несколько секунд с микрофона, распознать речь и ответить"
+              title={
+                earPhase === "recording"
+                  ? "Отпусти — закончить запись и распознать"
+                  : earPhase === "transcribing"
+                    ? "Распознаю речь…"
+                    : earPhase === "replying"
+                      ? "Думаю над ответом…"
+                      : "Зажми и говори, отпусти — распознаю и отвечу"
+              }
               arrow
               enterDelay={400}
             >
               <span>
                 <Button
                   size="small"
-                  variant="outlined"
-                  disabled={busy}
-                  onClick={() => void earListen()}
-                  sx={sensorBtnSx(false)}
+                  variant={earPhase === "recording" ? "contained" : "outlined"}
+                  disabled={
+                    (busy && earPhase === "idle") ||
+                    !earsOn ||
+                    earPhase === "transcribing" ||
+                    earPhase === "replying"
+                  }
+                  onPointerDown={(e) => void startEarHold(e)}
+                  onPointerUp={endEarHold}
+                  onPointerCancel={endEarHold}
+                  onLostPointerCapture={endEarHold}
+                  onContextMenu={(e) => e.preventDefault()}
+                  sx={{
+                    ...sensorBtnSx(earPhase === "recording"),
+                    ...(earPhase === "recording"
+                      ? {
+                          bgcolor: "#c45c5c",
+                          borderColor: "#e57373",
+                          color: "#fff",
+                          animation: "zipka-ear-pulse 1.1s ease-in-out infinite",
+                          "@keyframes zipka-ear-pulse": {
+                            "0%, 100%": { filter: "brightness(1)" },
+                            "50%": { filter: "brightness(1.15)" },
+                          },
+                          "&:hover": {
+                            bgcolor: "#b04e4e",
+                            borderColor: "#e57373",
+                          },
+                        }
+                      : {}),
+                    touchAction: "none",
+                    userSelect: "none",
+                  }}
                 >
-                  Слушать
+                  {earPhase === "recording"
+                    ? "● Запись…"
+                    : earPhase === "transcribing"
+                      ? "Распознаю…"
+                      : earPhase === "replying"
+                        ? "Думаю…"
+                        : "Слушать"}
                 </Button>
               </span>
             </Tooltip>
