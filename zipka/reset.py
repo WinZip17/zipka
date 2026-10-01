@@ -14,7 +14,7 @@ CONFIRM_PHRASES = {
     "confirm factory reset",
 }
 
-# Runtime dirs/files to wipe (keep persona.example.yaml and README.md)
+# Каталоги целиком (scaffolding вроде README/example не кладём сюда)
 WIPE_SUBDIRS = (
     "memory",
     "mind",
@@ -23,11 +23,35 @@ WIPE_SUBDIRS = (
     "books/notes",
     "books/extracted",
     "books/uploads",
-    "news",
 )
+
+# Файлы runtime; шаблоны (*.example.*, README.md) не трогаем
 WIPE_FILES = (
     "persona/persona.yaml",
+    "news/sources.json",
+    "news/items.jsonl",
 )
+
+# В этих каталогах снести всё, кроме keep-имён (защита scaffolding в git)
+WIPE_DIR_KEEP: dict[str, frozenset[str]] = {
+    "news": frozenset({"README.md", "sources.example.json"}),
+}
+
+
+def _wipe_dir_keeping(target: Path, keep: frozenset[str]) -> list[str]:
+    """Удалить содержимое каталога, сохранив keep-файлы. Вернуть список путей."""
+    removed: list[str] = []
+    if not target.is_dir():
+        return removed
+    for child in target.iterdir():
+        if child.name in keep:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+        removed.append(str(child))
+    return removed
 
 
 def reset_learning_data(
@@ -56,6 +80,15 @@ def reset_learning_data(
             except OSError as exc:
                 errors.append(f"{target}: {exc}")
 
+    for rel, keep in WIPE_DIR_KEEP.items():
+        target = base / rel
+        if not target.exists():
+            continue
+        try:
+            removed.extend(_wipe_dir_keeping(target, keep))
+        except OSError as exc:
+            errors.append(f"{target}: {exc}")
+
     for rel in WIPE_FILES:
         target = base / rel
         if target.exists():
@@ -67,7 +100,7 @@ def reset_learning_data(
 
     # recreate empty structure
     ensure_data_dirs(settings)
-    for sub in ("books/notes", "books/extracted", "books/uploads"):
+    for sub in ("books/notes", "books/extracted", "books/uploads", "news"):
         (base / sub).mkdir(parents=True, exist_ok=True)
 
     return {
