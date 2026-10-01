@@ -155,6 +155,7 @@ export function useChatSession() {
       st: StatusResponse | null | undefined,
       history?: { who: string }[],
     ) => {
+      // Локальный sendChat/upload ещё в полёте — только подтянуть лейбл фазы
       if (localRequestRef.current) {
         const label = st?.chat_pending?.label;
         if (label) setThinking(label);
@@ -166,18 +167,19 @@ export function useChatSession() {
       const lastIsUser = last?.who === "user";
       const label = st?.chat_pending?.label || "Вникаю…";
 
-      if (lastIsUser) {
-        sawServerPendingRef.current = true;
-        setThinking(label);
-        setBusy(true);
-        return;
-      }
-
-      if (sawServerPendingRef.current) {
+      // Ответ уже в ленте — UI свободен. Stale chat_pending из «запоздавшего»
+      // status/pending не должен снова включать «Вникаю…».
+      if (!lastIsUser) {
         sawServerPendingRef.current = false;
         setBusy(false);
         setThinking(null);
+        return;
       }
+
+      // Хвост истории — вопрос пользователя: ждём ответ (F5 / in-flight)
+      sawServerPendingRef.current = true;
+      setThinking(label);
+      setBusy(true);
     },
     [],
   );
@@ -248,24 +250,32 @@ export function useChatSession() {
 
   // Реакция на обновления session (в т.ч. после F5, пока ждём ответ)
   const historySyncInFlightRef = useRef(false);
+  const statusSyncGenRef = useRef(0);
   useEffect(() => {
     if (!status) return;
+    const gen = ++statusSyncGenRef.current;
     let alive = true;
     (async () => {
-      if (sawServerPendingRef.current && !localRequestRef.current) {
+      const waiting =
+        !localRequestRef.current &&
+        (Boolean(status.chat_pending || status.chat_busy) ||
+          sawServerPendingRef.current ||
+          messagesRef.current.at(-1)?.who === "user");
+
+      if (waiting) {
         if (historySyncInFlightRef.current) {
-          syncChatPending(status);
+          if (gen === statusSyncGenRef.current) syncChatPending(status);
           return;
         }
         historySyncInFlightRef.current = true;
         try {
           const hist = await loadInitialHistory();
-          if (!alive) return;
+          if (!alive || gen !== statusSyncGenRef.current) return;
           syncChatPending(status, hist);
         } finally {
           historySyncInFlightRef.current = false;
         }
-      } else {
+      } else if (gen === statusSyncGenRef.current) {
         syncChatPending(status);
       }
     })();
@@ -368,11 +378,17 @@ export function useChatSession() {
         playReplySound();
       }
     } finally {
+      // Локальный ход закончен — всегда снимаем блокировку UI.
+      // Stale chat_pending в кэше status больше не должен оставлять «Вникаю…».
       localRequestRef.current = false;
-      if (!statusRef.current?.chat_pending) {
-        setThinking(null);
-        setBusy(false);
-      }
+      sawServerPendingRef.current = false;
+      setThinking(null);
+      setBusy(false);
+      void queryClient.cancelQueries({ queryKey: queryKeys.session }).then(() =>
+        refreshStatus().then((st) => {
+          syncChatPending(st);
+        }),
+      );
     }
   };
 
