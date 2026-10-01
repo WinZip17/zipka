@@ -13,6 +13,7 @@ from zipka.books.reader import DEFAULT_MAX_FILES
 from zipka.config import ensure_data_dirs, get_settings
 from zipka.evolve.hard import APPROVE_PHRASE
 from zipka.mind.goals import normalize_goals
+from zipka.net.search import WebSearch
 
 app = typer.Typer(
     name="zipka",
@@ -376,6 +377,18 @@ def learn(query: str = typer.Argument(..., help="URL или тема")) -> None:
             title="learn",
         )
     )
+
+
+@app.command("search")
+def search_cmd(
+    query: str = typer.Argument(..., help="Что найти в сети"),
+) -> None:
+    """Веб-поиск (DDG / SearXNG) → 2–3 страницы → краткий ответ со ссылками."""
+    z = _agent()
+    text = query if WebSearch.wants_search(query) else f"Найди информацию о {query}"
+    with console.status("Ищу в сети..."):
+        reply = z.search.research(text)
+    console.print(Panel(reply, title="search"))
 
 
 @app.command("news")

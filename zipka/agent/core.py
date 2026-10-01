@@ -17,6 +17,7 @@ from zipka.memory.user_profile import UserProfiler
 from zipka.mind.goals import PseudoMind
 from zipka.mind.proactive import ProactiveEngine
 from zipka.net.learner import NetLearner
+from zipka.net.search import WebSearch
 from zipka.news import NewsDesk
 from zipka.safety.policy import SafetyPolicy
 from zipka.sensors.ears import Ears
@@ -55,6 +56,7 @@ class Zipka:
             self.llm, self.memory, self.mind, self.settings
         )
         self.net = NetLearner(self.llm, self.memory, self.settings)
+        self.search = WebSearch(self.llm, self.memory, self.net, self.settings)
         self.news = NewsDesk(self.llm, self.memory, self.settings)
         self.safety = SafetyPolicy()
         self.vision = VisionGgufClient(self.settings)

@@ -24,6 +24,7 @@ from zipka.memory.user_profile import UserProfiler
 from zipka.mind.goals import PseudoMind
 from zipka.mind.proactive import ProactiveEngine
 from zipka.net.learner import NetLearner
+from zipka.net.search import WebSearch
 from zipka.news import NewsDesk
 from zipka.reset import reset_learning_data
 from zipka.runtime_settings import compute_status, save_runtime
@@ -102,6 +103,7 @@ def reload_runtime(agent: Any) -> None:
         agent.llm, agent.memory, agent.mind, agent.settings
     )
     agent.net = NetLearner(agent.llm, agent.memory, agent.settings)
+    agent.search = WebSearch(agent.llm, agent.memory, agent.net, agent.settings)
     agent.news = NewsDesk(agent.llm, agent.memory, agent.settings)
     agent.safety = SafetyPolicy()
     agent.vision = VisionGgufClient(agent.settings)

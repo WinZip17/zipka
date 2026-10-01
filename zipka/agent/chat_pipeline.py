@@ -84,6 +84,19 @@ def handle_news(agent: Any, ctx: ChatCtx) -> str | None:
     return None
 
 
+def handle_web_search(agent: Any, ctx: ChatCtx) -> str | None:
+    search = getattr(agent, "search", None)
+    if search is None or not search.wants_search(ctx.text):
+        return None
+    agent.set_chat_phase("searching")
+    try:
+        reply = search.research(ctx.text, on_phase=agent.set_chat_phase)
+    except Exception as exc:
+        reply = f"Поиск в сети не удался: {exc}"
+    agent._remember_turn(ctx.text, reply)
+    return reply
+
+
 def handle_book_read(agent: Any, ctx: ChatCtx) -> str | None:
     agent.set_chat_phase("studying")
     reply = books_intent.try_read_from_message(agent, ctx.text)
@@ -191,6 +204,7 @@ PIPELINE: list[Handler] = [
     handle_reset,
     handle_url_read,
     handle_news,
+    handle_web_search,
     handle_book_read,
     handle_look,
     evolve_handlers.handle_soft_approve,

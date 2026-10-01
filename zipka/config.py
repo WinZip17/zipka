@@ -36,6 +36,14 @@ class Settings(BaseSettings):
         "medium.com,dev.to,stackoverflow.com,learn.microsoft.com"
     )
     zipka_net_max_bytes: int = 500_000
+    # Веб-поиск: auto | searxng | ddg
+    zipka_search_backend: str = "auto"
+    # Например http://127.0.0.1:8080 — если задан, auto предпочтёт SearXNG
+    zipka_searxng_url: str = ""
+    zipka_search_max_pages: int = 3
+    zipka_search_result_limit: int = 8
+    # open = читать найденные URL (SSRF-защита остаётся); allowlist = только net_allowlist
+    zipka_search_fetch_mode: str = "open"
     zipka_whisper_model: str = "base"
 
     @property

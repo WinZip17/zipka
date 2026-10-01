@@ -37,11 +37,12 @@
 4. Глаза (webcam) и уши (mic + faster-whisper)
 5. Цели и рефлексия (псевдоразум)
 6. Самообучение по сети (GET, allowlist) и чтение URL из чата (`прочитай https://…`)
-7. Профиль собеседника (имя, настроение, «свои», speaker-guard)
-8. CLI + web UI (React + MUI)
-9. Две роли GGUF: **чат** и **кодинг** (можно одна модель на обе)
-10. Дообучение на своих диалогах (LoRA → новый GGUF) — альтернатива «сохранись»
-11. Новости: RSS + публичные Telegram (`t.me/s`), выдержки и поиск по периоду
+7. Веб-поиск DDG/SearXNG (`найди информацию о…` → 2–3 источника + выжимка)
+8. Профиль собеседника (имя, настроение, «свои», speaker-guard)
+9. CLI + web UI (React + MUI)
+10. Две роли GGUF: **чат** и **кодинг** (можно одна модель на обе)
+11. Дообучение на своих диалогах (LoRA → новый GGUF) — альтернатива «сохранись»
+12. Новости: RSS + публичные Telegram (`t.me/s`), выдержки и поиск по периоду
 
 ## Быстрый старт
 
@@ -180,7 +181,8 @@ DJVU: читается через встроенный пакет **`djvu-rs`** 
 | `python -m zipka.main eyes on\|off\|snap\|screen\|window` | Камера / экран / окно |
 | `python -m zipka.main ears on\|off\|listen` | Микрофон |
 | `python -m zipka.main reset-learning` | Сброс всего обучения (с подтверждением) |
-| `python -m zipka.main learn URL\|тема` | Сеть |
+| `python -m zipka.main learn URL\|тема` | Сеть (allowlist) |
+| `python -m zipka.main search "…"` | Веб-поиск DDG/SearXNG |
 | `python -m zipka.main rollback ID` | Откат патча |
 | `python -m zipka.main finetune status\|propose\|start\|lineage` | LoRA → новый GGUF |
 | `python -m zipka.main web` | Web UI |
@@ -214,6 +216,17 @@ pip install torch --index-url https://download.pytorch.org/whl/cu126
 **Важно:** Pathfinder сейчас только как GGUF — для первого круга поставь чат на **Qwen2.5-7B** / **Qwen3-8B** (8GB VRAM ок с 4-bit) или укажи `override_hf_base` в `data/finetune/lineage.json`. Без CUDA-torch обучение идёт только на CPU/RAM и для 8B почти всегда OOM.
 
 CLI: `python -m zipka.main finetune propose` → `… start` → `… status`.
+
+## Веб-поиск (DDG / SearXNG)
+
+В чате: «Найди информацию о технических характеристиках Omoda C5 1.5».
+
+1. Зипка составляет поисковый запрос  
+2. Ищет через **SearXNG** (если задан `ZIPKA_SEARXNG_URL`) или **DuckDuckGo HTML**  
+3. Читает до 3 страниц (SSRF-защита; режим `ZIPKA_SEARCH_FETCH_MODE=open|allowlist`)  
+4. Даёт краткий ответ и список первоисточников  
+
+Надёжнее поднять свой SearXNG — DDG HTML иногда режет ботов. См. `.env.example`.
 
 ## Проактивность
 
@@ -253,7 +266,7 @@ CLI: `python -m zipka.main finetune propose` → `… start` → `… status`.
 ## Безопасность
 
 - Hard-evolve правит только `zipka/` и `web/`
-- Сеть: только GET по allowlist
+- Сеть: GET; learn — allowlist; веб-поиск — DDG/SearXNG + SSRF-защита (`ZIPKA_SEARCH_FETCH_MODE`)
 - Камера и микрофон выключены по умолчанию
 - Книги: в память идут выжимки, не полный текст в git
 - Сюжеты/фикшн (в т.ч. «взлом» в книге) не путаются с реальными вредоносными инструкциями
