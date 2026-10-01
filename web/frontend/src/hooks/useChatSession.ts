@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchHistory,
-  fetchNewsAuto,
-  fetchPending,
-  fetchStatus,
   proactiveHello,
   proactivePing,
   sendChat,
@@ -11,21 +9,27 @@ import {
 } from "../api";
 import { buildReplyChain, roleToWho, whoToRole } from "../chat/roles";
 import { playReplySound, unlockReplySound } from "../notifySound";
+import {
+  fetchNewsAuto,
+  fetchSessionSnapshot,
+  queryKeys,
+} from "../query/session";
 import type { Bubble, StatusResponse } from "../types";
 
 const PAGE_SIZE = 30;
+const SESSION_POLL_MS = 2000;
+const NEWS_POLL_MS = 2500;
+const PING_POLL_MS = 12 * 60 * 1000;
 
 export function useChatSession() {
   const idBase = useId();
   const seq = useRef(0);
+  const queryClient = useQueryClient();
   const [messages, setMessages] = useState<Bubble[]>([]);
-  const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [pending, setPending] = useState<unknown>(null);
   const [stagedFile, setStagedFile] = useState<File | null>(null);
   const [archiveMember, setArchiveMember] = useState("");
   const [busy, setBusy] = useState(false);
   const [thinking, setThinking] = useState<string | null>(null);
-  const [newsThinking, setNewsThinking] = useState<string | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [oldestIndex, setOldestIndex] = useState<number | null>(null);
@@ -39,7 +43,8 @@ export function useChatSession() {
   const localRequestRef = useRef(false);
   const sawServerPendingRef = useRef(false);
   const messagesRef = useRef<Bubble[]>([]);
-  const finetuneBusy = status?.finetune?.state === "running";
+  const helloDoneRef = useRef(false);
+  const pingInFlightRef = useRef(false);
 
   const addBubble = useCallback(
     (
@@ -66,17 +71,44 @@ export function useChatSession() {
     [idBase],
   );
 
+  const sessionQuery = useQuery({
+    queryKey: queryKeys.session,
+    queryFn: fetchSessionSnapshot,
+    refetchInterval: SESSION_POLL_MS,
+    refetchIntervalInBackground: false,
+    staleTime: 1000,
+  });
+
+  const status = sessionQuery.data?.status ?? null;
+  const pending = sessionQuery.data?.pending ?? null;
+  const finetuneBusy = status?.finetune?.state === "running";
+
+  const newsQuery = useQuery({
+    queryKey: queryKeys.newsAuto,
+    queryFn: fetchNewsAuto,
+    refetchInterval: NEWS_POLL_MS,
+    refetchIntervalInBackground: false,
+    enabled: !finetuneBusy,
+    staleTime: 1500,
+  });
+
+  const newsThinking =
+    newsQuery.data?.running && newsQuery.data.message
+      ? newsQuery.data.message
+      : null;
+
   const refreshStatus = useCallback(async () => {
     try {
-      const [st, pend] = await Promise.all([fetchStatus(), fetchPending()]);
-      setStatus(st);
-      statusRef.current = st;
-      setPending(pend.pending ?? null);
-      return st;
+      const result = await queryClient.fetchQuery({
+        queryKey: queryKeys.session,
+        queryFn: fetchSessionSnapshot,
+      });
+      statusRef.current = result.status;
+      return result.status;
     } catch {
       return null;
     }
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     hasMoreRef.current = hasMore;
@@ -85,6 +117,14 @@ export function useChatSession() {
   useEffect(() => {
     oldestRef.current = oldestIndex;
   }, [oldestIndex]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const loadInitialHistory = useCallback(async () => {
     try {
@@ -112,12 +152,11 @@ export function useChatSession() {
   }, [idBase]);
 
   const syncChatPending = useCallback(
-    async (
+    (
       st: StatusResponse | null | undefined,
       history?: { who: string }[],
     ) => {
       if (localRequestRef.current) {
-        // Локальный запрос сам держит thinking; подтянем лейбл фазы с сервера
         const label = st?.chat_pending?.label;
         if (label) setThinking(label);
         return;
@@ -128,7 +167,6 @@ export function useChatSession() {
       const lastIsUser = last?.who === "user";
       const label = st?.chat_pending?.label || "Вникаю…";
 
-      // Главный сигнал после F5: в истории есть вопрос без ответа
       if (lastIsUser) {
         sawServerPendingRef.current = true;
         setThinking(label);
@@ -162,7 +200,10 @@ export function useChatSession() {
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
-      const data = await fetchHistory({ before: oldestRef.current, limit: PAGE_SIZE });
+      const data = await fetchHistory({
+        before: oldestRef.current,
+        limit: PAGE_SIZE,
+      });
       setHasMore(!!data.has_more);
       setOldestIndex(data.oldest_index);
       const older = (data.messages || []).map((m, i) => ({
@@ -186,24 +227,21 @@ export function useChatSession() {
     }
   }, [idBase]);
 
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
+  // Первичная загрузка истории + hello
   useEffect(() => {
     let alive = true;
     (async () => {
       const hist = await loadInitialHistory();
       if (!alive) return;
-      // Сразу, до status: если лента обрывается на вопросе — покажи «Вникаю…»
       if (hist.at(-1)?.who === "user") {
         sawServerPendingRef.current = true;
         setThinking("Вникаю…");
         setBusy(true);
       }
       const st = await refreshStatus();
-      if (!alive) return;
-      await syncChatPending(st, hist);
+      if (!alive || helloDoneRef.current) return;
+      helloDoneRef.current = true;
+      syncChatPending(st, hist);
       try {
         if (hist.at(-1)?.who !== "user" && !st?.chat_pending) {
           const hello = await proactiveHello();
@@ -213,52 +251,63 @@ export function useChatSession() {
         /* ignore */
       }
     })();
-
-    const statusTimer = window.setInterval(async () => {
-      const st = await refreshStatus();
-      if (!alive) return;
-      // Пока ждём ответ после F5 — подтягиваем историю, чтобы поймать появление реплики
-      if (sawServerPendingRef.current && !localRequestRef.current) {
-        const hist = await loadInitialHistory();
-        if (!alive) return;
-        await syncChatPending(st, hist);
-      } else {
-        await syncChatPending(st);
-      }
-    }, 2000);
-
-    const newsTimer = window.setInterval(async () => {
-      if (statusRef.current?.finetune?.state === "running") {
-        setNewsThinking(null);
-        return;
-      }
-      try {
-        const auto = await fetchNewsAuto();
-        setNewsThinking(
-          auto.running && auto.message ? auto.message : null,
-        );
-      } catch {
-        /* ignore */
-      }
-    }, 2500);
-    const pingTimer = window.setInterval(async () => {
-      if (statusRef.current?.finetune?.state === "running") return;
-      if (statusRef.current?.chat_pending) return;
-      try {
-        const data = await proactivePing();
-        if (data.message) addBubble(data.message, "bot");
-        void refreshStatus();
-      } catch {
-        /* ignore */
-      }
-    }, 12 * 60 * 1000);
     return () => {
       alive = false;
-      window.clearInterval(statusTimer);
-      window.clearInterval(newsTimer);
-      window.clearInterval(pingTimer);
     };
   }, [addBubble, loadInitialHistory, refreshStatus, syncChatPending]);
+
+  // Реакция на обновления session (в т.ч. после F5, пока ждём ответ)
+  const historySyncInFlightRef = useRef(false);
+  useEffect(() => {
+    if (!status) return;
+    let alive = true;
+    (async () => {
+      if (sawServerPendingRef.current && !localRequestRef.current) {
+        if (historySyncInFlightRef.current) {
+          syncChatPending(status);
+          return;
+        }
+        historySyncInFlightRef.current = true;
+        try {
+          const hist = await loadInitialHistory();
+          if (!alive) return;
+          syncChatPending(status, hist);
+        } finally {
+          historySyncInFlightRef.current = false;
+        }
+      } else {
+        syncChatPending(status);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [status, loadInitialHistory, syncChatPending]);
+
+  // Редкий ping — без гонки копий
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const st = statusRef.current;
+      if (st?.finetune?.state === "running") return;
+      if (st?.chat_pending) return;
+      if (pingInFlightRef.current) return;
+      pingInFlightRef.current = true;
+      void proactivePing()
+        .then((data) => {
+          if (data.message) {
+            addBubble(data.message, "bot");
+            void refreshStatus();
+          }
+        })
+        .catch(() => {
+          /* ignore */
+        })
+        .finally(() => {
+          pingInFlightRef.current = false;
+        });
+    }, PING_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [addBubble, refreshStatus]);
 
   const onSend = async (message: string) => {
     if (busy || statusRef.current?.finetune?.state === "running") return;
@@ -272,7 +321,9 @@ export function useChatSession() {
       if (stagedFile) {
         const file = stagedFile;
         setStagedFile(null);
-        const label = message ? `${message}\n📎 ${file.name}` : `📎 ${file.name}`;
+        const label = message
+          ? `${message}\n📎 ${file.name}`
+          : `📎 ${file.name}`;
         addBubble(label, "user");
         setThinking("Изучаю…");
         try {

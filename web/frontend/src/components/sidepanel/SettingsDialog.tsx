@@ -233,8 +233,15 @@ export function SettingsDialog({
     if (!open) return;
     const state = finetuneInfo?.status?.state;
     if (state !== "running" && state !== "succeeded_pending_apply") return;
+    let inFlight = false;
     const id = window.setInterval(() => {
-      void refreshFinetune().then(() => onRefresh());
+      if (inFlight) return;
+      inFlight = true;
+      void refreshFinetune()
+        .then(() => onRefresh())
+        .finally(() => {
+          inFlight = false;
+        });
     }, 5000);
     return () => window.clearInterval(id);
   }, [open, finetuneInfo?.status?.state, onRefresh]);
