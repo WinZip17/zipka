@@ -16,7 +16,7 @@ import type {
   NewsRssSource,
   NewsTelegramSource,
   StatusResponse,
-} from "../../api";
+} from "../../types";
 import { intervalSelectValue } from "./utils";
 
 type Props = {

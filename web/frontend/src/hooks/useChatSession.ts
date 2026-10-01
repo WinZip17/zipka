@@ -8,11 +8,10 @@ import {
   proactivePing,
   sendChat,
   uploadBook,
-  type StatusResponse,
 } from "../api";
 import { buildReplyChain, roleToWho, whoToRole } from "../chat/roles";
-import type { Bubble } from "../components/MessageList";
 import { playReplySound, unlockReplySound } from "../notifySound";
+import type { Bubble, StatusResponse } from "../types";
 
 const PAGE_SIZE = 30;
 

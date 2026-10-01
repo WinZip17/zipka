@@ -25,17 +25,19 @@ import {
   setSoftEvolveDialogue,
   setSensorsEnabled,
   startFinetune,
-  type FinetuneStatusResponse,
-  type NewsIntervalOption,
-  type NewsRssSource,
-  type NewsTelegramSource,
-  type StatusResponse,
 } from "../../api";
 import {
   getNotifyVolume,
   playReplySound,
   setNotifyVolume,
 } from "../../notifySound";
+import type {
+  FinetuneStatusResponse,
+  NewsIntervalOption,
+  NewsRssSource,
+  NewsTelegramSource,
+  StatusResponse,
+} from "../../types";
 import { DataTab } from "./DataTab";
 import { FinetuneTab } from "./FinetuneTab";
 import { ModelsTab } from "./ModelsTab";

@@ -1,4 +1,4 @@
-import type { Bubble } from "../components/MessageList";
+import type { Bubble } from "../types";
 
 export function roleToWho(role: string): "user" | "bot" {
   return role === "user" ? "user" : "bot";

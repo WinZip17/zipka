@@ -15,7 +15,7 @@ import Switch from "@mui/material/Switch";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
-import type { StatusResponse } from "../../api";
+import type { StatusResponse } from "../../types";
 
 type Props = {
   status: StatusResponse | null;

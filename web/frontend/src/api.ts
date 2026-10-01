@@ -1,206 +1,17 @@
-export type ChatMessage = {
-  role: string;
-  content: string;
-  ts?: string | null;
-  reply_to?: {
-    role?: string;
-    content?: string;
-    ts?: string | null;
-  } | null;
-};
-
-export type HistoryResponse = {
-  messages: ChatMessage[];
-  has_more: boolean;
-  oldest_index: number | null;
-};
-
-export type StatusLimits = {
-  max_book_bytes?: number;
-  max_book_human?: string;
-  ram_available_bytes?: number | null;
-  ram_available_human?: string | null;
-};
-
-export type LlmBackendInfo = {
-  backend?: "gguf" | "ollama" | string;
-  model?: string;
-  model_path?: string;
-  host?: string;
-  available?: boolean;
-  chat_model_id?: string;
-  chat_model_label?: string;
-};
-
-export type ChatModelProfile = {
-  id: string;
-  label: string;
-  blurb?: string;
-  filename?: string;
-  present?: boolean;
-  path?: string | null;
-  size_hint_gb?: number;
-  active?: boolean;
-};
-
-export type ModelRoleBlock = {
-  filename?: string;
-  label?: string;
-  present?: boolean;
-  path?: string | null;
-};
-
-export type GgufFileInfo = {
-  filename: string;
-  path?: string;
-  size_bytes?: number;
-  size_gb?: number | null;
-  label?: string;
-  blurb?: string;
-};
-
-export type ChatModelsStatus = {
-  active_id?: string;
-  active_label?: string;
-  active_path?: string | null;
-  active_present?: boolean;
-  models_dir?: string;
-  profiles?: ChatModelProfile[];
-  download_hint?: string;
-  files?: GgufFileInfo[];
-  chat?: ModelRoleBlock;
-  code?: ModelRoleBlock;
-  same_model?: boolean;
-  defaults?: { chat?: string; code?: string };
-};
-
-export type SpeakerGuardSummary = {
-  same_person?: boolean | null;
-  confidence?: number | null;
-  alert?: boolean;
-  signals?: string[];
-  reason?: string;
-  alerts_count?: number;
-};
-
-export type UserProfileSummary = {
-  name?: string;
-  how_to_address?: string;
-  personality_type?: string;
-  character?: string[];
-  peculiarities?: string[];
-  mood?: string;
-  mood_previous?: string;
-  likes?: string[];
-  dislikes?: string[];
-  time_habits?: string[];
-  current_state?: string;
-  energy?: string;
-  facts_count?: number;
-  evidence_count?: number;
-  bond?: "early" | "growing" | "attached" | string;
-  inner_circle?: { name?: string; role?: string }[];
-  updated_at?: string;
-  style_ready?: boolean;
-  style_samples?: number;
-  speaker?: SpeakerGuardSummary;
-};
-
-export type ComputeSettings = {
-  mode?: "cpu" | "gpu" | "hybrid" | string;
-  gpu_layers?: number;
-  resolved_n_gpu_layers?: number;
-  hybrid_possible?: boolean;
-  hybrid_hint?: string;
-  llama_gpu_offload?: boolean;
-  nvidia_detected?: boolean;
-  note?: string;
-  load?: {
-    n_layer?: number | null;
-    n_gpu_layers_requested?: number | null;
-    n_gpu_layers_effective?: number | null;
-    n_cpu_layers?: number | null;
-    n_threads?: number | null;
-    loaded?: boolean;
-  };
-};
-
-export type StatusResponse = {
-  ollama: boolean;
-  llm?: LlmBackendInfo;
-  model: string;
-  vision_model?: string;
-  vision?: {
-    available?: boolean;
-    backend?: string | null;
-    filename?: string | null;
-    mmproj?: string | null;
-    handler?: string | null;
-    label?: string | null;
-    path?: string | null;
-    download_hint?: string | null;
-  };
-  eyes: boolean;
-  ears: boolean;
-  pending_patch?: boolean;
-  models?: string[];
-  limits?: StatusLimits;
-  approve_phrase?: string;
-  user?: UserProfileSummary;
-  compute?: ComputeSettings;
-  chat_models?: ChatModelsStatus;
-  model_roles?: ChatModelsStatus;
-  pending_finetune?: boolean;
-  finetune_approve_phrase?: string;
-  finetune_reset_phrase?: string;
-  pending_soft?: boolean;
-  soft_approve_phrase?: string;
-  soft_evolve_from_dialogue?: boolean;
-  sensors_enabled?: boolean;
-  finetune?: {
-    state?: string;
-    job_id?: string;
-    generation?: number;
-    phase?: string;
-    error?: string;
-    log?: string;
-    result?: Record<string, unknown>;
-    updated_at?: string;
-    started_at?: string;
-    finished_at?: string;
-  };
-  finetune_lineage?: {
-    generation?: number;
-    active_gguf?: string;
-    active_checkpoint?: string;
-  };
-  news?: {
-    sources?: NewsSources;
-    items?: number;
-  };
-  proactive?: {
-    today?: string;
-    used?: number;
-    max?: number;
-    remaining?: number;
-    last_rare_ping_at?: string | null;
-  };
-  chat_busy?: boolean;
-  chat_pending?: {
-    id?: string;
-    kind?: string;
-    phase?: string;
-    label?: string;
-    user_text?: string;
-    started_at?: string;
-    user_saved?: boolean;
-  } | null;
-};
-
-export type PendingResponse = {
-  pending: unknown;
-  approve_phrase?: string;
-};
+import type {
+  ChatModelsStatus,
+  ComputeSettings,
+  FinetuneStatusResponse,
+  HistoryResponse,
+  LlmBackendInfo,
+  NewsAutoStatus,
+  NewsRssSource,
+  NewsSourcesResponse,
+  NewsTelegramSource,
+  PendingResponse,
+  ReplyContextItem,
+  StatusResponse,
+} from "./types";
 
 async function parseJson<T>(res: Response): Promise<T> {
   return (await res.json().catch(() => ({}))) as T;
@@ -228,12 +39,6 @@ export async function fetchHistory(opts: {
   if (!res.ok) throw new Error("history failed");
   return parseJson(res);
 }
-
-export type ReplyContextItem = {
-  role: "user" | "assistant";
-  content: string;
-  ts?: string | null;
-};
 
 export async function sendChat(
   message: string,
@@ -470,40 +275,6 @@ export async function setSensorsEnabled(enabled: boolean) {
   return data;
 }
 
-export type FinetuneStatusResponse = {
-  status?: {
-    state?: string;
-    job_id?: string;
-    generation?: number;
-    phase?: string;
-    error?: string;
-    log?: string;
-    result?: Record<string, unknown>;
-    updated_at?: string;
-    started_at?: string;
-    finished_at?: string;
-  };
-  pending?: {
-    id?: string;
-    generation?: number;
-    pairs?: number;
-    chat_pairs?: number;
-    identity_pairs?: number;
-    export_gguf_name?: string;
-    base?: { kind?: string; hf_id?: string; path?: string };
-    params?: Record<string, unknown>;
-  } | null;
-  lineage?: {
-    generation?: number;
-    active_gguf?: string;
-    active_checkpoint?: string;
-    history?: unknown[];
-  };
-  approve_phrase?: string;
-  reset_phrase?: string;
-  base_gguf?: string;
-};
-
 export async function fetchFinetuneStatus(): Promise<FinetuneStatusResponse> {
   const res = await fetch("/api/finetune/status");
   return parseJson(res);
@@ -586,53 +357,6 @@ export async function resetFinetune(confirm_phrase: string) {
   }
   return data;
 }
-
-export type NewsIntervalOption = {
-  value: string | number;
-  label: string;
-  minutes?: number | null;
-};
-
-export type NewsRssSource = {
-  url: string;
-  interval?: string | number;
-};
-
-export type NewsTelegramSource = {
-  id: string;
-  interval?: string | number;
-};
-
-export type NewsSources = {
-  global_interval_min?: number | null;
-  rss?: Array<string | NewsRssSource>;
-  telegram?: Array<string | NewsTelegramSource>;
-  last_fetch?: Record<string, string>;
-  updated_at?: string;
-};
-
-export type NewsAutoStatus = {
-  running?: boolean;
-  phase?: string | null;
-  message?: string | null;
-  pending_after_chat?: boolean;
-  due_count?: number;
-  due?: unknown[];
-  last_result?: {
-    at?: string;
-    added?: number;
-    errors?: string[];
-    error?: string;
-  } | null;
-  interval_options?: NewsIntervalOption[];
-  source_interval_options?: NewsIntervalOption[];
-};
-
-export type NewsSourcesResponse = {
-  sources?: NewsSources;
-  items?: number;
-  auto?: NewsAutoStatus;
-};
 
 export async function fetchNewsSources(): Promise<NewsSourcesResponse> {
   const res = await fetch("/api/news/sources");

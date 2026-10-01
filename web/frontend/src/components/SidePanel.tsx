@@ -25,9 +25,9 @@ import {
   eyesAction,
   learn,
   sendChat,
-  type StatusResponse,
 } from "../api";
 import { playReplySound } from "../notifySound";
+import type { StatusResponse } from "../types";
 import { InfoDialog } from "./sidepanel/InfoDialog";
 import { SettingsDialog } from "./sidepanel/SettingsDialog";
 import { headerBtnSx } from "./sidepanel/styles";

@@ -6,18 +6,7 @@ import IconButton from "@mui/material/IconButton";
 import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-
-export type Bubble = {
-  id: string;
-  who: "user" | "bot";
-  text: string;
-  at?: string | null;
-  replyToId?: string | null;
-  replyTo?: {
-    who: "user" | "bot";
-    text: string;
-  } | null;
-};
+import type { Bubble } from "../types";
 
 type Props = {
   messages: Bubble[];
