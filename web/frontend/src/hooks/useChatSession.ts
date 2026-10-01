@@ -2,7 +2,6 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchHistory,
-  proactiveHello,
   proactivePing,
   sendChat,
   uploadBook,
@@ -19,7 +18,8 @@ import type { Bubble, StatusResponse } from "../types";
 const PAGE_SIZE = 30;
 const SESSION_POLL_MS = 2000;
 const NEWS_POLL_MS = 2500;
-const PING_POLL_MS = 12 * 60 * 1000;
+/** Как часто спрашивать сервер «пора ли пинговать» (сам сервер ждёт 30м–3ч простоя). */
+const PING_POLL_MS = 60 * 1000;
 
 export function useChatSession() {
   const idBase = useId();
@@ -43,7 +43,6 @@ export function useChatSession() {
   const localRequestRef = useRef(false);
   const sawServerPendingRef = useRef(false);
   const messagesRef = useRef<Bubble[]>([]);
-  const helloDoneRef = useRef(false);
   const pingInFlightRef = useRef(false);
 
   const addBubble = useCallback(
@@ -227,7 +226,7 @@ export function useChatSession() {
     }
   }, [idBase]);
 
-  // Первичная загрузка истории + hello
+  // Первичная загрузка истории (без мгновенного hello/ping)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -239,22 +238,13 @@ export function useChatSession() {
         setBusy(true);
       }
       const st = await refreshStatus();
-      if (!alive || helloDoneRef.current) return;
-      helloDoneRef.current = true;
+      if (!alive) return;
       syncChatPending(st, hist);
-      try {
-        if (hist.at(-1)?.who !== "user" && !st?.chat_pending) {
-          const hello = await proactiveHello();
-          if (alive && hello.message) addBubble(hello.message, "bot");
-        }
-      } catch {
-        /* ignore */
-      }
     })();
     return () => {
       alive = false;
     };
-  }, [addBubble, loadInitialHistory, refreshStatus, syncChatPending]);
+  }, [loadInitialHistory, refreshStatus, syncChatPending]);
 
   // Реакция на обновления session (в т.ч. после F5, пока ждём ответ)
   const historySyncInFlightRef = useRef(false);
@@ -284,12 +274,16 @@ export function useChatSession() {
     };
   }, [status, loadInitialHistory, syncChatPending]);
 
-  // Редкий ping — без гонки копий
+  // Редкий ping: сервер сам ждёт 30м–3ч простоя после сообщения пользователя
   useEffect(() => {
     const id = window.setInterval(() => {
       const st = statusRef.current;
       if (st?.finetune?.state === "running") return;
       if (st?.chat_pending) return;
+      const nextAt = st?.proactive?.next_rare_ping_at;
+      if (!nextAt) return; // ещё не планировали — не дёргаем API
+      const due = Date.parse(nextAt);
+      if (!Number.isNaN(due) && Date.now() < due) return;
       if (pingInFlightRef.current) return;
       pingInFlightRef.current = true;
       void proactivePing()

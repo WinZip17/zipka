@@ -176,6 +176,10 @@ class Zipka:
         )
         self.memory.add_chat("user", text, reply_to=reply_to_last)
         self.pending_turn.mark_user_saved()
+        try:
+            self.proactive.note_user_activity()
+        except Exception:
+            pass
         self._chat_busy = True
         self._last_chat_reply: str | None = None
 

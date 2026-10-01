@@ -4,7 +4,7 @@ import json
 import random
 import re
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from zipka.config import Settings, ensure_data_dirs, get_settings
@@ -13,6 +13,9 @@ from zipka.mind.goals import PseudoMind
 
 # Rare "came up first" pings per calendar day
 MAX_RARE_PINGS_PER_DAY = 3
+# После активности пользователя — случайная пауза до следующего пинга
+IDLE_PING_MIN_SEC = 30 * 60  # 30 мин
+IDLE_PING_MAX_SEC = 3 * 60 * 60  # 3 часа
 # Goal nudges every N user turns in an active session
 GOAL_NUDGE_EVERY_TURNS = 5
 
@@ -72,6 +75,8 @@ class ProactiveEngine:
         return {
             "rare_pings": {},  # "YYYY-MM-DD": count
             "last_rare_ping_at": None,
+            "next_rare_ping_at": None,
+            "last_user_activity_at": None,
             "last_greeting_date": None,
             "last_goal_nudge_at": None,
             "history": [],
@@ -216,6 +221,33 @@ class ProactiveEngine:
 
     def bump_turn(self) -> None:
         self.session_turns += 1
+
+    @staticmethod
+    def _parse_ts(raw: Any) -> datetime | None:
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    def note_user_activity(self) -> dict[str, Any]:
+        """Пользователь написал — запланировать пинг после случайного простоя."""
+        state = self._load()
+        now = datetime.now(timezone.utc)
+        delay = random.randint(IDLE_PING_MIN_SEC, IDLE_PING_MAX_SEC)
+        next_at = now + timedelta(seconds=delay)
+        state["last_user_activity_at"] = now.isoformat()
+        state["next_rare_ping_at"] = next_at.isoformat()
+        self._save(state)
+        return {
+            "last_user_activity_at": state["last_user_activity_at"],
+            "next_rare_ping_at": state["next_rare_ping_at"],
+            "idle_sec": delay,
+        }
 
     def maybe_goal_nudge(self) -> str | None:
         if self.session_turns == 0 or self.session_turns % GOAL_NUDGE_EVERY_TURNS != 0:
@@ -429,33 +461,25 @@ class ProactiveEngine:
             "max": MAX_RARE_PINGS_PER_DAY,
             "remaining": max(0, MAX_RARE_PINGS_PER_DAY - used),
             "last_rare_ping_at": state.get("last_rare_ping_at"),
+            "next_rare_ping_at": state.get("next_rare_ping_at"),
+            "last_user_activity_at": state.get("last_user_activity_at"),
+            "idle_min_sec": IDLE_PING_MIN_SEC,
+            "idle_max_sec": IDLE_PING_MAX_SEC,
         }
 
     def maybe_rare_ping(self, *, force: bool = False) -> str | None:
-        """Редкий фоновый пинг: не больше 2–3 раз в день.
+        """Пинг после случайного простоя (30 мин – 3 ч), ≤3 раз в день.
 
-        Это Зипка сама пишет после тишины — не ответ на «пинг» пользователя.
+        Пока пользователь не писал (нет next_rare_ping_at) — молчит при открытии чата.
         """
         if not force and not self.rare_ping_allowed():
             return None
         if not force:
-            # Soft gate: don't spam even within remaining budget
             state = self._load()
-            last = state.get("last_rare_ping_at")
-            if last:
-                try:
-                    last_dt = datetime.fromisoformat(last)
-                    if last_dt.tzinfo is None:
-                        last_dt = last_dt.replace(tzinfo=timezone.utc)
-                    hours = (
-                        datetime.now(timezone.utc) - last_dt
-                    ).total_seconds() / 3600
-                    if hours < 3:
-                        return None
-                except ValueError:
-                    pass
-            # ~35% chance when polled, so web polls don't always fire
-            if random.random() > 0.35:
+            next_at = self._parse_ts(state.get("next_rare_ping_at"))
+            if next_at is None:
+                return None
+            if datetime.now(timezone.utc) < next_at:
                 return None
 
         text = self._compose_rare_ping()
@@ -464,9 +488,10 @@ class ProactiveEngine:
         today = date.today().isoformat()
         pings = dict(state.get("rare_pings") or {})
         pings[today] = int(pings.get(today, 0)) + 1
-        # drop old days
         state["rare_pings"] = {today: pings[today]}
         state["last_rare_ping_at"] = datetime.now(timezone.utc).isoformat()
+        # следующий пинг — только после новой реплики пользователя и нового простоя
+        state["next_rare_ping_at"] = None
         self._save(state)
         self._log("rare_ping", text)
         return text

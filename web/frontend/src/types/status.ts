@@ -68,6 +68,10 @@ export type StatusResponse = {
     max?: number;
     remaining?: number;
     last_rare_ping_at?: string | null;
+    next_rare_ping_at?: string | null;
+    last_user_activity_at?: string | null;
+    idle_min_sec?: number;
+    idle_max_sec?: number;
   };
   chat_busy?: boolean;
   chat_pending?: {
