@@ -664,9 +664,12 @@ def api_hello() -> dict:
 
 @app.get("/api/proactive/ping")
 def api_ping(force: bool = False) -> dict:
+    _ensure_not_finetuning()
     text = agent.rare_ping(force=force)
     return {
+        "ok": True,
         "message": text,
+        "skipped": None if text else "no_materials",
         "pings": agent.proactive.rare_ping_status(),
     }
 

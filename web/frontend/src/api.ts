@@ -449,9 +449,18 @@ export async function proactiveHello() {
   return parseJson<{ message?: string }>(res);
 }
 
-export async function proactivePing() {
-  const res = await fetch("/api/proactive/ping");
-  return parseJson<{ message?: string }>(res);
+export async function proactivePing(force = false) {
+  const qs = force ? "?force=true" : "";
+  const res = await fetch(`/api/proactive/ping${qs}`, {
+    // restudy URL/файла + LLM может занять минуты
+    signal: AbortSignal.timeout(5 * 60 * 1000),
+  });
+  return parseJson<{
+    message?: string | null;
+    skipped?: string | null;
+    pings?: unknown;
+    detail?: string;
+  }>(res);
 }
 
 export const FILE_ACCEPT =

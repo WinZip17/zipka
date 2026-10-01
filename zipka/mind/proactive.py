@@ -11,6 +11,17 @@ from zipka.config import Settings, ensure_data_dirs, get_settings
 from zipka.memory.store import MemoryStore
 from zipka.mind.goals import PseudoMind
 
+# Заметки обучения, из которых можно взять материал для study-ping
+STUDY_NOTE_KINDS = frozenset(
+    {
+        "book",
+        "code",
+        "net_learn",
+        "net_read",
+        "net_search",
+        "news",
+    }
+)
 # Rare "came up first" pings per calendar day
 MAX_RARE_PINGS_PER_DAY = 3
 # После активности пользователя — случайная пауза до следующего пинга
@@ -317,11 +328,12 @@ class ProactiveEngine:
         prompt = (
             self._persona_bits()
             + gender_hint
-            + f"Только что изучила {label}: {source}\n"
+            + f"Только что снова перечитала {label}: {source}\n"
             f"{focus}"
             f"Выжимка:\n{digest[:2500]}\n\n"
             "Задай 1–2 уточняющих вопроса по сути (что проверить, что непонятно, "
-            "что развить). Коротко, от лица Зипки. Без ХХХХ."
+            "что развить). Коротко, от лица Зипки, живым тоном — как будто сама "
+            "вспомнила материал в тишине. Без «пинга», без «ты тут?», без ХХХХ."
         )
         if not self.llm.is_available():
             text = (
@@ -467,10 +479,29 @@ class ProactiveEngine:
             "idle_max_sec": IDLE_PING_MAX_SEC,
         }
 
-    def maybe_rare_ping(self, *, force: bool = False) -> str | None:
-        """Пинг после случайного простоя (30 мин – 3 ч), ≤3 раз в день.
+    def pick_study_note(self) -> dict[str, Any] | None:
+        """Случайная заметка обучения (книга/код/сеть/новости)."""
+        rows = self.memory.recent_notes(limit=500)
+        candidates = [
+            n
+            for n in rows
+            if str(n.get("kind") or "") in STUDY_NOTE_KINDS
+            and str(n.get("text") or "").strip()
+        ]
+        if not candidates:
+            return None
+        return random.choice(candidates)
 
-        Пока пользователь не писал (нет next_rare_ping_at) — молчит при открытии чата.
+    def maybe_rare_ping(
+        self,
+        *,
+        force: bool = False,
+        restudy: Any | None = None,
+    ) -> str | None:
+        """Study-ping: сначала перечитать материал, потом уточняющие вопросы.
+
+        Без подходящих заметок — молча None (и при force тоже).
+        Пока пользователь не писал (нет next_rare_ping_at) — не авто-пинг.
         """
         if not force and not self.rare_ping_allowed():
             return None
@@ -482,7 +513,40 @@ class ProactiveEngine:
             if datetime.now(timezone.utc) < next_at:
                 return None
 
-        text = self._compose_rare_ping()
+        note = self.pick_study_note()
+        if not note:
+            return None
+
+        studied: dict[str, Any] | None = None
+        if callable(restudy):
+            try:
+                studied = restudy(note)
+            except Exception:
+                studied = None
+        if not studied:
+            meta = note.get("meta") or {}
+            studied = {
+                "source": str(
+                    meta.get("title")
+                    or meta.get("source")
+                    or meta.get("url")
+                    or note.get("kind")
+                    or "материал"
+                ),
+                "digest": str(note.get("text") or ""),
+                "kind": str(note.get("kind") or "book"),
+            }
+        if not str(studied.get("digest") or "").strip():
+            return None
+
+        text = self.study_followup(
+            source=str(studied.get("source") or "материал"),
+            digest=str(studied.get("digest") or ""),
+            kind=str(studied.get("kind") or note.get("kind") or "book"),
+        )
+        if not text or not str(text).strip():
+            return None
+        text = str(text).strip()
 
         state = self._load()
         today = date.today().isoformat()
@@ -490,13 +554,17 @@ class ProactiveEngine:
         pings[today] = int(pings.get(today, 0)) + 1
         state["rare_pings"] = {today: pings[today]}
         state["last_rare_ping_at"] = datetime.now(timezone.utc).isoformat()
-        # следующий пинг — только после новой реплики пользователя и нового простоя
         state["next_rare_ping_at"] = None
         self._save(state)
         self._log("rare_ping", text)
+        try:
+            self.memory.add_chat("assistant", text)
+        except Exception:
+            pass
         return text
 
     def _compose_rare_ping(self) -> str:
+        """Legacy fallback (не используется study-pingом)."""
         from zipka.llm.sanitize import (
             enforce_addressee_gender,
             is_degenerate_generation,

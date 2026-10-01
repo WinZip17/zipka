@@ -24,6 +24,7 @@ import {
   earsAction,
   eyesAction,
   learn,
+  proactivePing,
   sendChat,
 } from "../api";
 import { playReplySound } from "../notifySound";
@@ -261,6 +262,29 @@ export function SidePanel({
       onBubble(data.summary || JSON.stringify(data), "bot");
       setLearnQ("");
       onRefresh();
+    });
+  };
+
+  const runForcePing = async () => {
+    if (busy) return;
+    await withBusy("Думаю…", async () => {
+      try {
+        const data = await proactivePing(true);
+        if (data.message) {
+          onBubble(data.message, "bot");
+          playReplySound();
+        } else if (data.skipped === "no_materials") {
+          onBubble(
+            "Пинг пропущен: нет заметок обучения (книга/код/сеть/новости).",
+            "bot",
+          );
+        } else {
+          onBubble("Пинг не сработал (лимит или пустой ответ).", "bot");
+        }
+        onRefresh();
+      } catch (err) {
+        onBubble(err instanceof Error ? err.message : String(err), "bot");
+      }
     });
   };
 
@@ -601,6 +625,24 @@ export function SidePanel({
           Learn
         </Button>
       </Stack>
+      <Tooltip
+        title="Форс study-ping: перечитает случайный материал обучения и задаст уточняющие вопросы (мимо таймера простоя)"
+        arrow
+        enterDelay={400}
+      >
+        <span>
+          <Button
+            size="small"
+            fullWidth
+            variant="outlined"
+            disabled={busy}
+            onClick={() => void runForcePing()}
+            sx={{ mt: 1 }}
+          >
+            Запустить пинг
+          </Button>
+        </span>
+      </Tooltip>
 
       <InfoDialog
         open={infoOpen}

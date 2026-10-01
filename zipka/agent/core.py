@@ -377,7 +377,99 @@ class Zipka:
     def rare_ping(self, *, force: bool = False) -> str | None:
         if self.is_finetune_busy():
             return None
-        return self.proactive.maybe_rare_ping(force=force)
+        return self.proactive.maybe_rare_ping(
+            force=force,
+            restudy=self._restudy_note_for_ping,
+        )
+
+    def _restudy_note_for_ping(self, note: dict[str, Any]) -> dict[str, Any]:
+        """Перечитать исходник заметки (URL/файл), иначе выжимку/текст заметки."""
+        from pathlib import Path
+
+        meta = dict(note.get("meta") or {})
+        kind = str(note.get("kind") or "book")
+        note_text = str(note.get("text") or "").strip()
+        source_label = str(
+            meta.get("title")
+            or meta.get("source")
+            or meta.get("url")
+            or meta.get("path")
+            or kind
+        )
+
+        def _summarize_raw(raw: str, *, label: str) -> str:
+            raw = (raw or "").strip()
+            if len(raw) < 40:
+                return ""
+            if not self.llm.is_available():
+                return raw[:3000]
+            instruction = (
+                "Перечитай материал и сделай свежую краткую выжимку для Зипки: "
+                "ключевые факты, термины, спорные места. Без воды, по-русски."
+            )
+            try:
+                return self.llm.summarize(raw[:12_000], instruction=instruction)
+            except Exception:
+                return raw[:3000]
+
+        # 1) URL
+        url = meta.get("url") or meta.get("source_url")
+        if not url and kind == "net_search":
+            urls = meta.get("urls") or []
+            if isinstance(urls, list) and urls:
+                url = urls[0]
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            try:
+                self.net._assert_safe_url(url)
+                raw = self.net._fetch_text(url)
+                digest = _summarize_raw(raw, label=url)
+                if digest:
+                    return {"source": url, "digest": digest, "kind": kind}
+            except Exception:
+                pass
+
+        # 2) Локальный файл
+        path_raw = meta.get("path") or meta.get("source")
+        if isinstance(path_raw, str) and path_raw.strip():
+            path = Path(path_raw)
+            try:
+                if path.is_file():
+                    load = getattr(self.books, "_load_text", None)
+                    raw = load(path) if callable(load) else path.read_text(
+                        encoding="utf-8", errors="ignore"
+                    )
+                    digest = _summarize_raw(str(raw), label=str(path))
+                    if digest:
+                        return {
+                            "source": str(path),
+                            "digest": digest,
+                            "kind": kind,
+                        }
+            except Exception:
+                pass
+
+        # 3) Сохранённая выжимка books/notes
+        digest_path = meta.get("digest_path")
+        if isinstance(digest_path, str) and digest_path.strip():
+            dp = Path(digest_path)
+            try:
+                if dp.is_file():
+                    body = dp.read_text(encoding="utf-8", errors="ignore")
+                    if body.strip():
+                        return {
+                            "source": str(dp),
+                            "digest": body[:8000],
+                            "kind": kind,
+                        }
+            except Exception:
+                pass
+
+        # 4) Текст заметки
+        return {
+            "source": source_label,
+            "digest": note_text,
+            "kind": kind,
+        }
 
     def try_look_from_message(self, text: str) -> str | None:
         return vision_intent.try_look_from_message(self, text)
