@@ -46,6 +46,7 @@ class Zipka:
         self.hard = HardEvolve(self._code_llm(), self.memory, self.settings)
         self.finetune = FinetuneEvolve(self.memory, self.settings)
         self.books = BookReader(self.llm, self.memory, self.settings)
+        self.books.on_phase = self.set_chat_phase
         self.eyes = Eyes(self.settings)
         self.ears = Ears(self.settings)
         self.user = UserProfiler(self.memory, self.llm, self.settings)

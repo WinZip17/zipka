@@ -94,6 +94,7 @@ def ensure_data_dirs(settings: Settings | None = None) -> Path:
         "finetune/checkpoints",
         "finetune/jobs",
         "news",
+        "books/rag",
     ):
         (base / sub).mkdir(parents=True, exist_ok=True)
     return base

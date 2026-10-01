@@ -13,6 +13,7 @@ PHASE_LABELS: dict[str, str] = {
     "replying": "Вникаю…",
     "reading": "Читаю…",
     "studying": "Изучаю…",
+    "indexing": "Индексирую книгу…",
     "looking": "Смотрю…",
     "listening": "Слушаю…",
     "learning": "Учусь…",

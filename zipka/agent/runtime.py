@@ -93,6 +93,7 @@ def reload_runtime(agent: Any) -> None:
     agent.hard = HardEvolve(code_llm(agent), agent.memory, agent.settings)
     agent.finetune = FinetuneEvolve(agent.memory, agent.settings)
     agent.books = BookReader(agent.llm, agent.memory, agent.settings)
+    agent.books.on_phase = agent.set_chat_phase
     agent.eyes = Eyes(agent.settings)
     agent.ears = Ears(agent.settings)
     agent.user = UserProfiler(agent.memory, agent.llm, agent.settings)

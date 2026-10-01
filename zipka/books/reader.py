@@ -230,6 +230,9 @@ class BookReader:
         self.notes_dir = self.settings.data_dir / "books" / "notes"
         self.extract_dir = self.settings.data_dir / "books" / "extracted"
         self.extract_dir.mkdir(parents=True, exist_ok=True)
+        self.notes_dir.mkdir(parents=True, exist_ok=True)
+        # Optional: (phase, label) — ставит Zipka для UI pending
+        self.on_phase: Any = None
 
     def read(
         self,
@@ -489,6 +492,14 @@ class BookReader:
             chunks=len(chunks),
         )
 
+    def _emit_phase(self, phase: str, label: str | None = None) -> None:
+        hook = self.on_phase
+        if callable(hook):
+            try:
+                hook(phase, label)
+            except Exception:
+                pass
+
     def _summarize_book(
         self,
         text: str,
@@ -499,50 +510,108 @@ class BookReader:
         archive_member: str | None,
         comment: str | None = None,
     ) -> dict:
-        """Один вызов LLM по выборке из начала/середины/конца — не 6 проходов подряд."""
-        sample = self._sample_book_text(text, budget=10_000)
-        focus = ""
-        if comment and comment.strip():
-            focus = (
-                f"\nКомментарий/фокус пользователя (обязательно учти): {comment.strip()}\n"
-                "Отвечай в первую очередь на этот фокус, остальное — кратко."
-            )
-        chars = len(text)
-        instruction = (
-            f"Сделай краткую выжимку книги «{source_label}» "
-            f"(~{chars} символов текста; ниже — выборка начала/середины/конца). "
-            "Сюжет, герои, тон, ключевые идеи. Не цитируй длинные куски дословно."
-            f"{focus}"
-        )
-        digest = self.llm.summarize(sample, instruction=instruction)
+        """RAG-изучение (если установлен .[rag]), иначе sample начало/середина/конец."""
         from zipka.llm.sanitize import is_degenerate_generation
 
-        if not digest or is_degenerate_generation(digest):
-            digest = self._heuristic_snippet(
-                sample, source_label=source_label, kind="book"
+        chars = len(text)
+        digest = ""
+        rag_meta: dict[str, Any] = {}
+
+        try:
+            from zipka.books.rag import (
+                BookRagStore,
+                book_id_for,
+                rag_available,
+                study_from_rag,
             )
+
+            if rag_available():
+                book_id = book_id_for(origin, archive_member)
+                store = BookRagStore(self.settings)
+
+                def _progress(msg: str) -> None:
+                    self._emit_phase("indexing", msg)
+
+                self._emit_phase("indexing", "Индексирую книгу…")
+                studied = study_from_rag(
+                    self.llm,
+                    store,
+                    book_id=book_id,
+                    text=text,
+                    source=origin,
+                    source_label=source_label,
+                    archive_member=archive_member,
+                    comment=comment,
+                    on_progress=_progress,
+                )
+                self._emit_phase("studying", "Изучаю…")
+                digest = str(studied.get("digest") or "")
+                rag_meta = {
+                    "rag_id": studied.get("rag_id") or book_id,
+                    "chunk_count": studied.get("chunk_count"),
+                    "retrieved": studied.get("retrieved"),
+                    "embed_model": studied.get("embed_model"),
+                    "rag_reused_index": studied.get("reused_index"),
+                }
+        except Exception:
+            digest = ""
+            rag_meta = {}
+
+        if not digest or is_degenerate_generation(digest):
+            # Fallback: прежняя выборка краёв
+            self._emit_phase("studying", "Изучаю…")
+            sample = self._sample_book_text(text, budget=10_000)
+            focus = ""
+            if comment and comment.strip():
+                focus = (
+                    f"\nКомментарий/фокус пользователя (обязательно учти): {comment.strip()}\n"
+                    "Отвечай в первую очередь на этот фокус, остальное — кратко."
+                )
+            instruction = (
+                f"Сделай краткую выжимку книги «{source_label}» "
+                f"(~{chars} символов текста; ниже — выборка начала/середины/конца). "
+                "Сюжет, герои, тон, ключевые идеи. Не цитируй длинные куски дословно."
+                f"{focus}"
+            )
+            digest = self.llm.summarize(sample, instruction=instruction)
+            if not digest or is_degenerate_generation(digest):
+                digest = self._heuristic_snippet(
+                    sample, source_label=source_label, kind="book"
+                )
+
+        note_meta: dict[str, Any] = {
+            "source": origin,
+            "archive_member": archive_member,
+            "chunks": int(rag_meta.get("retrieved") or rag_meta.get("chunk_count") or 1),
+            "chars": chars,
+            "path": str(path),
+            "comment": comment,
+        }
+        if rag_meta.get("rag_id"):
+            note_meta["rag_id"] = rag_meta["rag_id"]
+            note_meta["rag_chunk_count"] = rag_meta.get("chunk_count")
+            note_meta["rag_retrieved"] = rag_meta.get("retrieved")
+            note_meta["rag_embed_model"] = rag_meta.get("embed_model")
+
         self.memory.add_note(
             "book",
             digest[:1800],
-            meta={
-                "source": origin,
-                "archive_member": archive_member,
-                "chunks": 1,
-                "chars": chars,
-                "sampled_chars": len(sample),
-                "path": str(path),
-                "comment": comment,
-            },
+            meta=note_meta,
         )
-        return self._write_digest(
+        result = self._write_digest(
             digest=digest,
             origin=origin,
             archive_member=archive_member,
             source_label=source_label,
             kind="book",
             comment=comment,
-            chunks=1,
+            chunks=int(note_meta.get("chunks") or 1),
         )
+        if rag_meta.get("rag_id"):
+            result["rag_id"] = rag_meta["rag_id"]
+            result["rag_chunk_count"] = rag_meta.get("chunk_count")
+            result["rag_retrieved"] = rag_meta.get("retrieved")
+        return result
 
     def _write_digest(
         self,

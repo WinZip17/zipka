@@ -153,6 +153,22 @@ python -m zipka.main models download --id moondream2
 
 Для кода Зипка делает разбор: назначение, API, зависимости, паттерны (не копирует длинные куски).
 
+### RAG для книг (опционально)
+
+По умолчанию длинная книга сжимается выборкой начало/середина/конец. С пакетом RAG:
+
+```bash
+pip install -e ".[rag]"
+```
+
+при «прочитай / изучи» книгу Зипка:
+
+1. дробит текст на фрагменты и строит локальный индекс (`data/books/rag/…`);
+2. достаёт релевантные куски (по комментарию или обзорным запросам);
+3. пишет выжимку **по этим фрагментам** (в UI: «Индексирую книгу…» → «Изучаю…»).
+
+Без `.[rag]` поведение прежнее (sample). Модель эмбеддингов: `intfloat/multilingual-e5-small` (скачается при первом индексе).
+
 **Изучение чужого проекта (папка)** — по AI-приоритетам:
 
 1. AI-контекст: `AGENTS.md`, `PROJECT_MAP.md`, `.cursorrules`, …
@@ -256,6 +272,7 @@ CLI: `python -m zipka.main finetune propose` → `… start` → `… status`.
 | Проактивность (пинги, приветствия) | `data/mind/proactive.json` (gitignore) |
 | Compute + выбранные GGUF | `data/settings/runtime.json` (gitignore) |
 | Выжимки книг | `data/books/notes/*_digest.md` |
+| RAG-индекс книг | `data/books/rag/<book_id>/` (нужен `pip install -e ".[rag]"`) |
 | Распакованные из zip/rar | `data/books/extracted/` |
 | Локальные GGUF-модели | `data/models/*.gguf` (gitignore) |
 

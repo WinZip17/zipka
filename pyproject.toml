@@ -42,6 +42,9 @@ finetune = [
   "safetensors>=0.4.0",
   "bitsandbytes>=0.43.0; platform_system != 'Darwin'",
 ]
+rag = [
+  "sentence-transformers>=3.0.0",
+]
 
 [project.scripts]
 zipka = "zipka.main:main"
