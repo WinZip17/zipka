@@ -84,6 +84,8 @@ class Persona:
             self.save(DEFAULT_PERSONA)
 
     def load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            self._seed_from_example_or_default()
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
         merged = {**DEFAULT_PERSONA, **raw}
         # YAML «ключ: значение» в списке целей даёт dict — чиним

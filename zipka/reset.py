@@ -23,6 +23,7 @@ WIPE_SUBDIRS = (
     "books/notes",
     "books/extracted",
     "books/uploads",
+    "books/rag",
 )
 
 # Файлы runtime; шаблоны (*.example.*, README.md) не трогаем
@@ -52,6 +53,21 @@ def _wipe_dir_keeping(target: Path, keep: frozenset[str]) -> list[str]:
             child.unlink()
         removed.append(str(child))
     return removed
+
+
+def _reseed_persona(settings: Settings) -> str | None:
+    """Создать persona.yaml из example/default после сброса. Путь или None."""
+    from zipka.character.persona import Persona
+
+    path = settings.data_dir / "persona" / "persona.yaml"
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    # Persona.__init__ сам сидирует файл, если его нет
+    Persona(settings)
+    return str(path) if path.exists() else None
 
 
 def reset_learning_data(
@@ -100,14 +116,27 @@ def reset_learning_data(
 
     # recreate empty structure
     ensure_data_dirs(settings)
-    for sub in ("books/notes", "books/extracted", "books/uploads", "news"):
+    for sub in (
+        "books/notes",
+        "books/extracted",
+        "books/uploads",
+        "books/rag",
+        "news",
+    ):
         (base / sub).mkdir(parents=True, exist_ok=True)
+
+    seeded: str | None = None
+    try:
+        seeded = _reseed_persona(settings)
+    except Exception as exc:
+        errors.append(f"persona.yaml: {exc}")
 
     return {
         "ok": not errors,
         "removed": removed,
         "errors": errors,
         "data_dir": str(base),
+        "persona_seeded": seeded,
     }
 
 

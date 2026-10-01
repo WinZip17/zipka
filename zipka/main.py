@@ -289,8 +289,8 @@ def reset_learning_cmd(
 
     z = _agent()
     console.print(
-        "[bold red]Будет удалено:[/bold red] чат, заметки, цели, книги, "
-        "снимки, патчи, живой persona.yaml."
+        "[bold red]Будет удалено:[/bold red] чат, заметки, цели, книги/RAG, "
+        "снимки, патчи, живой persona.yaml (пересоздастся из example)."
     )
     if not yes:
         ok = typer.confirm("Точно сбросить обучение?", default=False)
