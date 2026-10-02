@@ -189,7 +189,7 @@ def filter_items(
     if topic_l:
         rows = desk.search(topic_l, days=filters.days, limit=max(filters.limit * 3, 30))
     else:
-        rows = desk.load_items(limit=400)
+        rows = desk.store.search_pool(days=filters.days, limit_scan=400)
 
     out: list[dict[str, Any]] = []
     for row in rows:

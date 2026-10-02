@@ -26,11 +26,15 @@ WIPE_SUBDIRS = (
     "books/rag",
 )
 
-# Файлы runtime; шаблоны (*.example.*, README.md) не трогаем
+# Файлы runtime (дублируют WIPE_DIR_KEEP/SUBDIRS — на случай остатков после lock)
 WIPE_FILES = (
     "persona/persona.yaml",
     "news/sources.json",
     "news/items.jsonl",
+    "news/items.jsonl.migrated",
+    "news/news.sqlite",
+    "news/news.sqlite-wal",
+    "news/news.sqlite-shm",
 )
 
 # В этих каталогах снести всё, кроме keep-имён (защита scaffolding в git)

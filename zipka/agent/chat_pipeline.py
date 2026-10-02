@@ -54,7 +54,10 @@ def handle_reset(agent: Any, ctx: ChatCtx) -> str | None:
     if is_reset_request(text):
         agent._reset_pending = True
         reply = (
-            "Это сотрёт чат, заметки, цели, книги, снимки и патчи в `data/`. "
+            "Это сотрёт чат, заметки, цели, книги (включая RAG), новости, "
+            "снимки, патчи и persona.yaml в `data/`. "
+            "Модели GGUF, settings и finetune не трогаю "
+            "(дообучение сбрасывается отдельно). "
             f"Если уверена — напиши точно: «{CONFIRM_PHRASE}». "
             "Любой другой ответ отменит сброс."
         )

@@ -484,10 +484,17 @@ def api_reset_info() -> dict:
         "wipes": [
             "data/memory",
             "data/mind",
-            "data/books/notes|uploads|extracted",
+            "data/books/notes|uploads|extracted|rag",
+            "data/news (кроме README и sources.example.json)",
             "data/snapshots",
             "data/patches",
-            "data/persona/persona.yaml",
+            "data/persona/persona.yaml (пересоздаётся из example)",
+        ],
+        "keeps": [
+            "data/models",
+            "data/settings/runtime.json",
+            "data/finetune (отдельный сброс дообучения)",
+            "scaffolding: README, *.example.*",
         ],
     }
 
@@ -597,7 +604,8 @@ class NewsIntervalIn(BaseModel):
 def api_news_sources() -> dict:
     return {
         "sources": agent.news.load_sources(),
-        "items": len(agent.news.load_items()),
+        "items": agent.news.items_count(),
+        "storage": agent.news.storage_stats(),
         "auto": agent.news.auto_status(),
     }
 
@@ -678,6 +686,37 @@ def api_news_ingest() -> dict:
 def api_news_search(q: str = "", days: int = 7) -> dict:
     hits = agent.news.search(q, days=max(1, min(days, 90)), limit=30)
     return {"query": q, "days": days, "hits": hits, "count": len(hits)}
+
+
+@app.post("/api/news/prune")
+def api_news_prune() -> dict:
+    """Архивировать/удалить выдержки сверх hot_days / max_items."""
+    return agent.news.prune_storage()
+
+
+@app.get("/api/news/storage")
+def api_news_storage() -> dict:
+    return agent.news.storage_stats()
+
+
+@app.post("/api/books/rag/gc")
+def api_books_rag_gc() -> dict:
+    from zipka.books.rag import BookRagStore, rag_available
+
+    if not rag_available():
+        raise HTTPException(400, 'RAG недоступен. pip install -e ".[rag]"')
+    store = BookRagStore(agent.settings)
+    return store.gc()
+
+
+@app.get("/api/books/rag/stats")
+def api_books_rag_stats() -> dict:
+    from zipka.books.rag import BookRagStore, rag_available
+
+    if not rag_available():
+        return {"available": False}
+    store = BookRagStore(agent.settings)
+    return {"available": True, **store.stats()}
 
 
 @app.post("/api/reflect")

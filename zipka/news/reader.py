@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -208,8 +207,11 @@ class NewsDesk:
         self.root = self.settings.data_dir / "news"
         self.root.mkdir(parents=True, exist_ok=True)
         self.sources_path = self.root / "sources.json"
-        self.items_path = self.root / "items.jsonl"
-        self._ingest_lock = threading.Lock()
+        self.items_path = self.root / "items.jsonl"  # legacy; store = SQLite
+        from zipka.news.store import NewsStore
+
+        self.store = NewsStore(self.root)
+        self._ingest_lock = self.store._lock  # общий lock append/search/prune
         self._auto_running = False
         self._auto_phase = ""
         self._pending_after_chat = False
@@ -495,76 +497,34 @@ class NewsDesk:
             raise
 
     def known_ids(self) -> set[str]:
-        ids: set[str] = set()
-        if not self.items_path.exists():
-            return ids
-        with self.items_path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if row.get("id"):
-                    ids.add(str(row["id"]))
-        return ids
+        return self.store.known_ids()
 
     def append_item(self, item: dict[str, Any]) -> None:
-        from zipka.news.ru_index import ensure_item_lemmas
-
-        ensure_item_lemmas(item)
-        self.items_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.items_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        self.store.upsert(item)
 
     def load_items(self, *, limit: int | None = None) -> list[dict[str, Any]]:
-        if not self.items_path.exists():
-            return []
-        rows: list[dict[str, Any]] = []
-        with self.items_path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        if limit is not None and limit > 0:
-            return rows[-limit:]
-        return rows
+        return self.store.load_items(limit=limit)
+
+    def items_count(self) -> int:
+        return self.store.count()
 
     def rewrite_items(self, rows: list[dict[str, Any]]) -> None:
-        """Перезаписать items.jsonl (реиндекс лемм и т.п.)."""
-        self.items_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.items_path.with_suffix(".jsonl.tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            for row in rows:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        tmp.replace(self.items_path)
+        """Совместимость: массовый upsert (lemmas backfill)."""
+        for row in rows:
+            self.store.upsert(row)
 
     def ensure_lemmas_indexed(self, *, force: bool = False) -> int:
-        """Проставить lemmas у старых выдержек. Возвращает число обновлённых строк."""
-        from zipka.news.ru_index import ensure_item_lemmas
-
         if self._lemmas_ready and not force:
             return 0
-        rows = self.load_items()
-        if not rows:
-            self._lemmas_ready = True
-            return 0
-        changed = 0
-        for row in rows:
-            before = row.get("lemmas")
-            ensure_item_lemmas(row, force=force)
-            if force or before != row.get("lemmas"):
-                changed += 1
-        if changed:
-            self.rewrite_items(rows)
+        changed = self.store.ensure_lemmas(force=force)
         self._lemmas_ready = True
         return changed
+
+    def prune_storage(self, **kwargs: Any) -> dict[str, Any]:
+        return self.store.prune(**kwargs)
+
+    def storage_stats(self) -> dict[str, Any]:
+        return self.store.stats()
 
     def _http_get(self, url: str, *, timeout: float = 45.0) -> str:
         with httpx.Client(
@@ -850,21 +810,17 @@ class NewsDesk:
                 self.append_item(item)
                 known.add(iid)
                 added.append(item)
-                self.memory.add_note(
-                    "news",
-                    f"{summary}\nПервоисточник: {source_url}",
-                    meta={
-                        "id": iid,
-                        "source": item["source"],
-                        "url": source_url,
-                        "source_url": source_url,
-                        "title": title,
-                        "published_at": item.get("published_at"),
-                    },
-                )
+                # Новости живут в NewsStore (SQLite), не дублируем в memory/notes.
 
             if mark_fetch and fetched_keys:
                 self.mark_fetched(fetched_keys)
+
+            prune_info: dict[str, Any] = {}
+            if added:
+                try:
+                    prune_info = self.prune_storage()
+                except Exception as exc:
+                    errors.append(f"prune: {exc}")
 
             return {
                 "ok": True,
@@ -874,6 +830,8 @@ class NewsDesk:
                     "telegram": len(tg_list),
                 },
                 "errors": errors,
+                "storage": self.storage_stats(),
+                "prune": prune_info,
                 "items": [
                     {
                         "title": x["title"],
@@ -913,18 +871,24 @@ class NewsDesk:
         except OSError:
             pass
 
-        q_groups = query_lemma_groups(q)
-        since = _utc_now() - timedelta(days=max(1, days))
-        pool: list[dict[str, Any]] = []
-        lemma_docs: list[list[str]] = []
-        for row in self.load_items():
-            when = _parse_dt(row.get("published_at")) or _parse_dt(row.get("fetched_at"))
-            if when and when < since:
-                continue
-            lemmas = ensure_item_lemmas(row)
-            pool.append(row)
-            lemma_docs.append(lemmas)
+        # Быстрый FTS-проход; lemma-rerank на ограниченном пуле.
+        fts_hits = self.store.fts_search(q, days=days, limit=max(limit * 4, 40))
+        fts_ids = {str(r.get("id")) for r in fts_hits if r.get("id")}
 
+        q_groups = query_lemma_groups(q)
+        pool = self.store.search_pool(days=days, limit_scan=8_000)
+        if fts_hits:
+            # приоритет: FTS-кандидаты + свежий пул
+            seen = set(fts_ids)
+            merged = list(fts_hits)
+            for row in pool:
+                rid = str(row.get("id") or "")
+                if rid and rid not in seen:
+                    merged.append(row)
+                    seen.add(rid)
+            pool = merged
+
+        lemma_docs = [ensure_item_lemmas(row) for row in pool]
         idf = build_idf(lemma_docs)
         hits: list[dict[str, Any]] = []
         for row in pool:
@@ -933,8 +897,14 @@ class NewsDesk:
             if not ok:
                 fuzzy = fuzzy_fallback_score(q, row)
                 if fuzzy < FUZZY_MIN:
-                    continue
-                score = fuzzy / 10.0
+                    # FTS уже нашёл — оставить с пониженным score
+                    if str(row.get("id")) not in fts_ids:
+                        continue
+                    score = fuzzy / 10.0 if fuzzy else 0.05
+                else:
+                    score = fuzzy / 10.0
+            if str(row.get("id")) in fts_ids:
+                score = float(score) + 0.5
             hits.append({**row, "_score": score})
         hits.sort(
             key=lambda r: (

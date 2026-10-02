@@ -650,7 +650,7 @@ export function SettingsDialog({
     const info = await resetInfo();
     const phrase = info.confirm_phrase || "подтверждаю сброс обучения";
     const ok = window.confirm(
-      "Сбросить ВСЁ обучение?\n\nБудут удалены: чат, заметки, цели, книги, снимки, патчи, persona.yaml.\n\nЭто необратимо.",
+      "Сбросить ВСЁ обучение?\n\nБудут удалены: чат, заметки, цели, книги (RAG), новости, снимки, патчи, persona.yaml.\nНе трогаются: models/, settings/, finetune/.\n\nЭто необратимо.",
     );
     if (!ok) {
       onBubble("Сброс отменён.", "bot");

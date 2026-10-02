@@ -42,6 +42,18 @@ def is_finetune_busy(agent: Any) -> bool:
         return False
 
 
+def _books_rag_stats(agent: Any) -> dict[str, Any]:
+    try:
+        from zipka.books.rag import BookRagStore, rag_available
+
+        if not rag_available():
+            return {"available": False}
+        store = BookRagStore(agent.settings)
+        return {"available": True, **store.stats()}
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+
 def unload_inference_models(agent: Any) -> None:
     """Освободить RAM/VRAM перед тяжёлым LoRA (чат-GGUF / vision)."""
     import gc
@@ -181,8 +193,10 @@ def status(agent: Any) -> dict[str, Any]:
         },
         "news": {
             "sources": agent.news.load_sources(),
-            "items": len(agent.news.load_items()),
+            "items": agent.news.items_count(),
+            "storage": agent.news.storage_stats(),
         },
+        "books_rag": _books_rag_stats(agent),
         "mind": agent.mind.load(),
         "proactive": agent.proactive.rare_ping_status(),
         "limits": {
