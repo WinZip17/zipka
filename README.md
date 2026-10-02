@@ -143,17 +143,29 @@ Shared run-конфиги в [`.run/`](.run/). Открывай **корень**
 **PyCharm дополнительно:** **Zipka: Web UI** / **Zipka: Chat** — Python, interpreter  
 `$PROJECT_DIR$/.venv/Scripts/python.exe` (после Setup).
 
-**Linux:** **Zipka: Setup/Web UI/Chat (Linux)** (`bash` + `.sh`).
+**Linux:** **Zipka: Setup/Web UI/Chat (Linux)** (`tools/ide_host_shell.sh` → на хосте, если WebStorm из Flatpak).
 
-Крестики у Linux-конфигов на Windows — норма. Старые Batch-конфиги убраны  
-(`Unknown run configuration type BatchConfigurationType`).
+На **Bazzite** / Flatpak WebStorm:
+1. В обычном терминале хоста (не через sudo):
+   ```bash
+   cd ~/…/zipka   # путь к клону
+   chmod +x setup_zipka.sh start_zipka.sh start_zipka_chat.sh tools/ide_host_shell.sh
+   ./setup_zipka.sh --with-llama
+   ```
+2. Один раз разреши WebStorm вызывать хост (иначе Run молчит):
+   ```bash
+   flatpak override --user --talk-name=org.freedesktop.Flatpak com.jetbrains.WebStorm
+   ```
+   (если ID другой — `flatpak list | grep -i webstorm`)
+3. Settings → Tools → Terminal → Shell path:
+   `/usr/bin/env -- flatpak-spawn --host bash`
+4. Перезапусти WebStorm, затем **Zipka: Setup (Linux)** / **Zipka: Web UI (Linux)**.
 
-После обновления `.run/`: закрой список Run и открой снова, либо  
-**File → Invalidate Caches → Just Restart** (если видишь старые имена).
+**Не используй `sudo ./setup_zipka.sh`** — у root другой PATH, npm «пропадает».
 
-Опционально: **Zipka: Frontend Dev** (`npm run dev` на :5173).
+Крестики у Windows-конфигов на Linux — норма.
 
-URL: http://127.0.0.1:8765
+Опционально: **Zipka: Frontend Dev**. URL: http://127.0.0.1:8765
 
 ### Скрипты в корне
 
@@ -162,6 +174,7 @@ URL: http://127.0.0.1:8765
 | `setup_zipka.sh` / `setup_zipka.bat` | Проверка/установка Python venv, pip, npm, сборка UI, `.env` |
 | `start_zipka.sh` / `start_zipka.bat` | Web UI |
 | `start_zipka_chat.sh` / `start_zipka_chat.bat` | Чат в терминале |
+| `tools/ide_host_shell.sh` | Interpreter для Linux Run (Flatpak → host) |
 | `create_shortcut.ps1` | Ярлык «Зипка» на Desktop (Windows) |
 | `.run/*.run.xml` | Конфиги Run для PyCharm / WebStorm |
 

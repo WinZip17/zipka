@@ -19,6 +19,8 @@ Usage: ./setup_zipka.sh [options]
   --with-rag        pip install -e ".[rag]"
   --skip-frontend   не трогать npm / сборку UI
   -h, --help        эта справка
+
+Не запускай через sudo — Node/npm из user PATH пропадут.
 EOF
 }
 
@@ -35,6 +37,79 @@ done
 
 log() { printf '[Zipka setup] %s\n' "$*"; }
 die() { printf '[Zipka setup] ERROR: %s\n' "$*" >&2; exit 1; }
+
+# --- не root ---
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  die "Не запускай от root/sudo. Выйди из sudo и запусти: ./setup_zipka.sh
+(под sudo нет твоего user PATH — npm/node «пропадают», хотя в обычном терминале есть)."
+fi
+
+# --- подтянуть user PATH (nvm/fnm/brew) в non-interactive shell ---
+load_user_node_path() {
+  export PATH="${HOME}/.local/bin:${HOME}/.npm-global/bin:${PATH:-/usr/bin}"
+
+  if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+    # shellcheck disable=SC1091
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+  elif [[ -x "${HOME}/.linuxbrew/bin/brew" ]]; then
+    # shellcheck disable=SC1091
+    eval "$("${HOME}/.linuxbrew/bin/brew" shellenv)"
+  fi
+
+  if [[ -s "${HOME}/.nvm/nvm.sh" ]]; then
+    # shellcheck disable=SC1091
+    export NVM_DIR="${HOME}/.nvm"
+    # shellcheck disable=SC1091
+    . "${NVM_DIR}/nvm.sh"
+  fi
+
+  if [[ -s "${HOME}/.fnm/fnm" ]] || command -v fnm >/dev/null 2>&1; then
+    if command -v fnm >/dev/null 2>&1; then
+      eval "$(fnm env)"
+    elif [[ -x "${HOME}/.fnm/fnm" ]]; then
+      eval "$("${HOME}/.fnm/fnm" env)"
+    fi
+  fi
+
+  if [[ -s "${HOME}/.volta/bin/volta" ]]; then
+    export VOLTA_HOME="${HOME}/.volta"
+    export PATH="${VOLTA_HOME}/bin:${PATH}"
+  fi
+
+  # asdf
+  if [[ -s "${HOME}/.asdf/asdf.sh" ]]; then
+    # shellcheck disable=SC1091
+    . "${HOME}/.asdf/asdf.sh"
+  fi
+}
+
+resolve_npm() {
+  load_user_node_path
+  if command -v npm >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+    return 0
+  fi
+  local cand
+  if [[ -d "${HOME}/.nvm/versions/node" ]]; then
+    for cand in "${HOME}/.nvm/versions/node"/*/bin; do
+      if [[ -x "${cand}/npm" && -x "${cand}/node" ]]; then
+        export PATH="${cand}:${PATH}"
+        return 0
+      fi
+    done
+  fi
+  for cand in \
+    "${HOME}/.local/share/fnm/aliases/default/bin" \
+    /home/linuxbrew/.linuxbrew/bin \
+    "${HOME}/.linuxbrew/bin" \
+    /usr/local/bin
+  do
+    if [[ -x "${cand}/npm" && -x "${cand}/node" ]]; then
+      export PATH="${cand}:${PATH}"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # --- Python ---
 PY_SYS=""
@@ -114,10 +189,15 @@ fi
 
 # --- Node / frontend ---
 if [[ "$SKIP_FRONTEND" -eq 0 ]]; then
-  if ! command -v npm >/dev/null 2>&1; then
-    die "npm не найден — поставь Node.js 18+ (для Web UI)"
+  if ! resolve_npm; then
+    die "npm/node не найдены в PATH.
+В обычном терминале они есть, а здесь — нет (часто nvm/fnm не подхватывается).
+Проверь: command -v npm; which node
+Запуск: БЕЗ sudo, из каталога проекта:
+  chmod +x setup_zipka.sh start_zipka.sh start_zipka_chat.sh tools/ide_host_shell.sh
+  ./setup_zipka.sh"
   fi
-  log "Node: $(node --version 2>&1), npm: $(npm --version 2>&1)"
+  log "Node: $(node --version 2>&1), npm: $(npm --version 2>&1) @ $(command -v npm)"
   pushd web/frontend >/dev/null
   if [[ ! -d node_modules ]]; then
     log "npm install …"
@@ -142,5 +222,5 @@ mkdir -p data/models data/settings data/memory data/mind
 log "Готово."
 log "Запуск Web UI:  ./start_zipka.sh"
 log "Чат в терминале: ./start_zipka_chat.sh"
-log "IDE: Run → Zipka: Web UI  (конфиги в .run/)"
+log "IDE: Run → Zipka: Web UI (Linux)"
 log "URL: http://127.0.0.1:8765"
