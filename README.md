@@ -132,21 +132,28 @@ python -m zipka.main models download --id moondream2
 
 ### PyCharm / WebStorm
 
-В репозитории лежат shared run-конфиги в [`.run/`](.run/) — после открытия проекта они появляются в списке **Run**.
+Shared run-конфиги в [`.run/`](.run/). Открывай **корень** репозитория (`zipka/`).
 
-1. Открой папку проекта как Project Root.
-2. Один раз: **Run → Zipka: Setup (Linux|Windows)**  
-   (или `./setup_zipka.sh` / `setup_zipka.bat` в терминале).
-3. **PyCharm:** Settings → Python Interpreter → выбери `.venv`  
-   (`…/bin/python` на Linux, `…\Scripts\python.exe` на Windows).  
-   Затем **Zipka: Web UI** / **Zipka: Chat** (тип Python module).
-4. **WebStorm** (и PyCharm без настройки SDK):  
-   - Linux: **Zipka: Web UI (Linux)** / **Zipka: Chat (Linux)**  
-   - Windows: **Zipka: Web UI (Windows)** или **Zipka: Web UI (Windows / WebStorm)**  
-     (второй вариант через `cmd.exe` — если Batch-тип недоступен)
-5. Опционально рядом: **Zipka: Frontend Dev** (`npm run dev` на :5173).
+**Windows (PyCharm и WebStorm) — рабочие варианты:**
 
-URL после старта: http://127.0.0.1:8765
+1. Один раз: **Zipka: Setup (Windows)**
+2. Дальше: **Zipka: Web UI (Windows)** или **Zipka: Chat (Windows)**  
+   (через `cmd.exe` + `.bat`, без плагинов Batch)
+
+**PyCharm дополнительно:** **Zipka: Web UI** / **Zipka: Chat** — Python, interpreter  
+`$PROJECT_DIR$/.venv/Scripts/python.exe` (после Setup).
+
+**Linux:** **Zipka: Setup/Web UI/Chat (Linux)** (`bash` + `.sh`).
+
+Крестики у Linux-конфигов на Windows — норма. Старые Batch-конфиги убраны  
+(`Unknown run configuration type BatchConfigurationType`).
+
+После обновления `.run/`: закрой список Run и открой снова, либо  
+**File → Invalidate Caches → Just Restart** (если видишь старые имена).
+
+Опционально: **Zipka: Frontend Dev** (`npm run dev` на :5173).
+
+URL: http://127.0.0.1:8765
 
 ### Скрипты в корне
 

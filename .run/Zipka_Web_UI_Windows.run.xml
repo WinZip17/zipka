@@ -1,11 +1,16 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Zipka: Web UI (Windows)" type="BatchConfigurationType" factoryName="Batch">
-    <option name="INTERPRETER_OPTIONS" value="" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
-    <option name="PARENT_ENVS" value="true" />
-    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/start_zipka.bat" />
-    <option name="PARAMETERS" value="" />
-    <module name="" />
+  <configuration default="false" name="Zipka: Web UI (Windows)" type="ShConfigurationType">
+    <option name="EXECUTE_IN_TERMINAL" value="true" />
+    <option name="EXECUTE_SCRIPT_FILE" value="true" />
+    <option name="INDEPENDENT_PATH" value="true" />
+    <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+    <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+    <option name="INTERPRETER_OPTIONS" value="/c" />
+    <option name="INTERPRETER_PATH" value="C:\Windows\System32\cmd.exe" />
+    <option name="SCRIPT_OPTIONS" value="" />
+    <option name="SCRIPT_PATH" value="$PROJECT_DIR$/start_zipka.bat" />
+    <option name="SCRIPT_TEXT" value="" />
+    <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
     <method v="2" />
   </configuration>
 </component>
