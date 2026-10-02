@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Zipka: Setup (Linux)" type="ShConfigurationType">
+    <option name="EXECUTE_IN_TERMINAL" value="true" />
+    <option name="EXECUTE_SCRIPT_FILE" value="true" />
+    <option name="INDEPENDENT_PATH" value="true" />
+    <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
+    <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="INTERPRETER_PATH" value="/bin/bash" />
+    <option name="SCRIPT_OPTIONS" value="" />
+    <option name="SCRIPT_PATH" value="$PROJECT_DIR$/setup_zipka.sh" />
+    <option name="SCRIPT_TEXT" value="" />
+    <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2" />
+  </configuration>
+</component>

@@ -4,6 +4,7 @@ cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
   echo [Zipka] Не найден .venv\Scripts\python.exe
+  echo Сначала запусти setup_zipka.bat
   pause
   exit /b 1
 )

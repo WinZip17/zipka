@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Zipka: Setup (Windows)" type="BatchConfigurationType" factoryName="Batch">
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="PARENT_ENVS" value="true" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/setup_zipka.bat" />
+    <option name="PARAMETERS" value="" />
+    <module name="" />
+    <method v="2" />
+  </configuration>
+</component>

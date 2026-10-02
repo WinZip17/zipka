@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
   echo [Zipka] Не найден .venv\Scripts\python.exe
-  echo Создай venv и поставь зависимости: pip install -r requirements.txt
+  echo Сначала запусти setup_zipka.bat  ^(или в IDE: Zipka: Setup ^)
   pause
   exit /b 1
 )

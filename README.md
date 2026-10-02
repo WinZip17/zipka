@@ -46,13 +46,29 @@
 
 ## Быстрый старт
 
+Один раз настрой окружение (venv, pip, npm, сборка UI, `.env`):
+
+```bash
+# Linux / macOS
+chmod +x setup_zipka.sh start_zipka.sh start_zipka_chat.sh
+./setup_zipka.sh --with-llama
+
+# Windows
+setup_zipka.bat --with-llama
+```
+
+Опции setup: `--with-llama`, `--with-finetune`, `--with-rag`, `--skip-frontend`.
+
+Дальше — запуск Web UI: `./start_zipka.sh` / `start_zipka.bat` или конфигурации IDE (см. ниже).
+
 ### Вариант A — без Ollama (файл модели)
 
 ```bash
+# после setup_zipka.* :
+# Linux
+source .venv/bin/activate
+# Windows
 .\.venv\Scripts\activate
-pip install -r requirements.txt
-pip install llama-cpp-python --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-copy .env.example .env
 
 # рекомендуемые GGUF в data/models:
 python -m zipka.tools.download_chat_models --id all
@@ -75,25 +91,15 @@ python -m zipka.main web
 Compute: CPU / GPU / hybrid — там же. Состояние: `data/settings/runtime.json`.
 
 Legacy в `.env`: `ZIPKA_CHAT_MODEL=pathfinder|qwen25` (стартовое имя чата; UI/runtime перекрывает).  
-Опционально: `ZIPKA_GGUF_CTX=8192`.
+Опционально: `ZIPKA_GGUF_CTX=8192` (или `num_ctx` в UI).
 
 ### Вариант B — системная Ollama
 
 ```bash
-# если python в PATH:
-python -m venv .venv
-# на этой машине venv уже создан через локальный CPython 3.11
+./setup_zipka.sh          # Linux
+# setup_zipka.bat         # Windows
 
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
 # в .env: ZIPKA_LLM_BACKEND=ollama и модель из `ollama list` (по умолчанию my_qwen:latest)
-
-# web UI (React + @mui/material) — один раз собрать:
-cd web\frontend
-npm install
-npm run build
-cd ..\..
 
 python -m zipka.main status
 python -m zipka.main chat
@@ -102,7 +108,7 @@ python -m zipka.main web
 
 Web: http://127.0.0.1:8765
 
-Разработка UI: в одном терминале `python -m zipka.main web`, в другом `cd web/frontend && npm run dev` (Vite на :5173, API проксируется).
+Разработка UI: в одном терминале `python -m zipka.main web`, в другом `cd web/frontend && npm run dev` (Vite на :5173, API проксируется). Либо IDE-конфиг **Zipka: Frontend Dev**.
 
 **Приоритет (`ZIPKA_LLM_BACKEND=auto`):** если в `data/models` есть `*.gguf` → локальный llama.cpp; иначе Ollama.
 
@@ -114,7 +120,9 @@ python -m zipka.main models download --id moondream2
 
 При снимке чатовая модель выгружается, кадр описывает vision, затем чат снова прогревается. Запасной путь — Ollama с `OLLAMA_VISION_MODEL`.
 
-## Запуск ярлыком
+## Запуск: ярлык и JetBrains IDE
+
+### Ярлык (Windows)
 
 1. Один раз создай ярлык на рабочий стол:
    ```bat
@@ -122,13 +130,33 @@ python -m zipka.main models download --id moondream2
    ```
 2. Двойной клик по **Зипка** на рабочем столе → поднимается Web UI.
 
-Файлы запуска в корне проекта:
+### PyCharm / WebStorm
+
+В репозитории лежат shared run-конфиги в [`.run/`](.run/) — после открытия проекта они появляются в списке **Run**.
+
+1. Открой папку проекта как Project Root.
+2. Один раз: **Run → Zipka: Setup (Linux|Windows)**  
+   (или `./setup_zipka.sh` / `setup_zipka.bat` в терминале).
+3. **PyCharm:** Settings → Python Interpreter → выбери `.venv`  
+   (`…/bin/python` на Linux, `…\Scripts\python.exe` на Windows).  
+   Затем **Zipka: Web UI** / **Zipka: Chat** (тип Python module).
+4. **WebStorm** (и PyCharm без настройки SDK):  
+   - Linux: **Zipka: Web UI (Linux)** / **Zipka: Chat (Linux)**  
+   - Windows: **Zipka: Web UI (Windows)** или **Zipka: Web UI (Windows / WebStorm)**  
+     (второй вариант через `cmd.exe` — если Batch-тип недоступен)
+5. Опционально рядом: **Zipka: Frontend Dev** (`npm run dev` на :5173).
+
+URL после старта: http://127.0.0.1:8765
+
+### Скрипты в корне
 
 | Файл | Что делает |
 |------|------------|
-| `start_zipka.bat` | Web UI (для ярлыка) |
-| `start_zipka_chat.bat` | Чат в терминале |
-| `create_shortcut.ps1` | Создаёт ярлык «Зипка» на Desktop |
+| `setup_zipka.sh` / `setup_zipka.bat` | Проверка/установка Python venv, pip, npm, сборка UI, `.env` |
+| `start_zipka.sh` / `start_zipka.bat` | Web UI |
+| `start_zipka_chat.sh` / `start_zipka_chat.bat` | Чат в терминале |
+| `create_shortcut.ps1` | Ярлык «Зипка» на Desktop (Windows) |
+| `.run/*.run.xml` | Конфиги Run для PyCharm / WebStorm |
 
 ## Как добавить книгу или код
 
