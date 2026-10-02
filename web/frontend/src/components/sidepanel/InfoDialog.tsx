@@ -219,6 +219,19 @@ export function InfoDialog({
           {llmBackend === "gguf" && status?.llm?.model_path ? (
             <InfoLine label="Файл чата" value={status.llm.model_path} variant="inline" />
           ) : null}
+          {status?.sampling ? (
+            <InfoLine
+              label="Сэмплинг"
+              variant="inline"
+              value={
+                `t=${status.sampling.temperature ?? "—"} · ` +
+                `rep=${status.sampling.repeat_penalty ?? "—"} · ` +
+                `ctx=${status.sampling.num_ctx ?? "—"} · ` +
+                `seed=${status.sampling.seed ?? "—"}` +
+                (status.sampling.enable_thinking ? " · think" : "")
+              }
+            />
+          ) : null}
           {(status?.chat_models?.files || []).length > 0 ? (
             <Typography
               variant="caption"

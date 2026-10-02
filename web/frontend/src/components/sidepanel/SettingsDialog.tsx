@@ -22,6 +22,7 @@ import {
   setCompute,
   setModels,
   setNewsSchedule,
+  setSampling,
   setSoftEvolveDialogue,
   setSensorsEnabled,
   startFinetune,
@@ -83,6 +84,13 @@ export function SettingsDialog({
   const [gpuLayers, setGpuLayers] = useState(24);
   const [computeBusy, setComputeBusy] = useState(false);
   const [computeMsg, setComputeMsg] = useState<string | null>(null);
+  const [temperature, setTemperature] = useState(0.7);
+  const [repeatPenalty, setRepeatPenalty] = useState(1.1);
+  const [seed, setSeed] = useState(-1);
+  const [numCtx, setNumCtx] = useState(8192);
+  const [enableThinking, setEnableThinking] = useState(false);
+  const [samplingBusy, setSamplingBusy] = useState(false);
+  const [samplingMsg, setSamplingMsg] = useState<string | null>(null);
   const [chatGguf, setChatGguf] = useState("");
   const [codeGguf, setCodeGguf] = useState("");
   const [modelsBusy, setModelsBusy] = useState(false);
@@ -159,6 +167,18 @@ export function SettingsDialog({
     if (m === "cpu" || m === "gpu" || m === "hybrid") setComputeMode(m);
     if (typeof c.gpu_layers === "number") setGpuLayers(c.gpu_layers);
   }, [status?.compute]);
+
+  useEffect(() => {
+    const s = status?.sampling;
+    if (!s) return;
+    if (typeof s.temperature === "number") setTemperature(s.temperature);
+    if (typeof s.repeat_penalty === "number") setRepeatPenalty(s.repeat_penalty);
+    if (typeof s.seed === "number") setSeed(s.seed);
+    if (typeof s.num_ctx === "number") setNumCtx(s.num_ctx);
+    if (typeof s.enable_thinking === "boolean") {
+      setEnableThinking(s.enable_thinking);
+    }
+  }, [status?.sampling]);
 
   useEffect(() => {
     if (typeof status?.soft_evolve_from_dialogue === "boolean") {
@@ -528,6 +548,37 @@ export function SettingsDialog({
     }
   };
 
+  const applySampling = async () => {
+    setSamplingBusy(true);
+    setSamplingMsg(null);
+    try {
+      const data = await setSampling({
+        temperature,
+        repeat_penalty: repeatPenalty,
+        seed,
+        enable_thinking: enableThinking,
+        num_ctx: numCtx,
+      });
+      const s = data.sampling;
+      const reloaded = Boolean(
+        (data as { reloaded?: boolean }).reloaded,
+      );
+      setSamplingMsg(
+        `temp ${s?.temperature ?? temperature} · ` +
+          `rep ${s?.repeat_penalty ?? repeatPenalty} · ` +
+          `ctx ${s?.num_ctx ?? numCtx} · ` +
+          `seed ${s?.seed ?? seed}` +
+          ((s?.enable_thinking ?? enableThinking) ? " · thinking" : "") +
+          (reloaded ? " · модель перезагружена" : ""),
+      );
+      onRefresh();
+    } catch (err) {
+      setSamplingMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSamplingBusy(false);
+    }
+  };
+
   const applySoftDialogue = async (enabled: boolean) => {
     setSoftDialogueBusy(true);
     setSoftDialogueMsg(null);
@@ -714,6 +765,19 @@ export function SettingsDialog({
             computeBusy={computeBusy}
             computeMsg={computeMsg}
             onApplyCompute={applyCompute}
+            temperature={temperature}
+            onTemperature={setTemperature}
+            repeatPenalty={repeatPenalty}
+            onRepeatPenalty={setRepeatPenalty}
+            seed={seed}
+            onSeed={setSeed}
+            numCtx={numCtx}
+            onNumCtx={setNumCtx}
+            enableThinking={enableThinking}
+            onEnableThinking={setEnableThinking}
+            samplingBusy={samplingBusy}
+            samplingMsg={samplingMsg}
+            onApplySampling={applySampling}
             softDialogue={softDialogue}
             softDialogueBusy={softDialogueBusy}
             softDialogueMsg={softDialogueMsg}

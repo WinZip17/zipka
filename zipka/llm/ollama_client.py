@@ -8,7 +8,7 @@ import httpx
 from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
 from zipka.llm.sanitize import strip_thinking
-from zipka.runtime_settings import resolve_gpu_layers
+from zipka.runtime_settings import resolve_gpu_layers, sampling_status
 
 
 @dataclass
@@ -81,9 +81,19 @@ class OllamaClient:
             "messages": payload_messages,
             "stream": stream,
         }
-        options: dict[str, Any] = {}
-        if temperature is not None:
-            options["temperature"] = float(temperature)
+        sampling = sampling_status(self.settings)
+        options: dict[str, Any] = {
+            "temperature": (
+                float(temperature)
+                if temperature is not None
+                else float(sampling["temperature"])
+            ),
+            "repeat_penalty": float(sampling["repeat_penalty"]),
+            "num_ctx": int(sampling["num_ctx"]),
+        }
+        seed = int(sampling["seed"])
+        if seed >= 0:
+            options["seed"] = seed
         if max_tokens is not None:
             # Ollama: num_predict; слишком большое значение на маленьком ctx → 400
             options["num_predict"] = max(64, min(int(max_tokens), 2048))

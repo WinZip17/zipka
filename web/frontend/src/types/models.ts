@@ -68,3 +68,11 @@ export type ComputeSettings = {
     loaded?: boolean;
   };
 };
+
+export type SamplingSettings = {
+  temperature?: number;
+  repeat_penalty?: number;
+  seed?: number;
+  enable_thinking?: boolean;
+  num_ctx?: number;
+};

@@ -6,7 +6,7 @@ from typing import Any
 from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
 from zipka.llm.sanitize import strip_thinking
-from zipka.runtime_settings import resolve_gpu_layers
+from zipka.runtime_settings import resolve_gpu_layers, sampling_status
 
 
 def probe_llama_cpp() -> tuple[bool, str]:
@@ -142,7 +142,12 @@ class GgufClient:
         }
 
     def _desired_ctx(self) -> int:
-        return max(2048, int(self.settings.zipka_gguf_ctx))
+        try:
+            from zipka.runtime_settings import sampling_status
+
+            return max(2048, int(sampling_status(self.settings)["num_ctx"]))
+        except Exception:
+            return max(2048, int(self.settings.zipka_gguf_ctx))
 
     @staticmethod
     def _resolve_threads(settings: Settings) -> int:
@@ -278,8 +283,8 @@ class GgufClient:
         if prompt_tokens >= n_ctx - 64:
             raise LlmError(
                 f"Промпт (~{prompt_tokens} tok) не влезает в ctx={n_ctx}. "
-                f"Увеличь ZIPKA_GGUF_CTX в .env (сейчас {self.settings.zipka_gguf_ctx}) "
-                "и перезапусти Зипку."
+                f"Увеличь num_ctx в Настройки → Модели → Сэмплинг "
+                f"(или ZIPKA_GGUF_CTX в .env) и перезапусти/примени."
             )
         return fitted, allowed_out
 
@@ -313,7 +318,12 @@ class GgufClient:
             {"role": str(m.get("role") or "user"), "content": m.get("content") or ""}
             for m in messages
         ]
-        temp = 0.7 if temperature is None else float(temperature)
+        sampling = sampling_status(self.settings)
+        temp = (
+            float(sampling["temperature"])
+            if temperature is None
+            else float(temperature)
+        )
         want_out = (
             int(max_tokens)
             if max_tokens is not None
@@ -329,12 +339,18 @@ class GgufClient:
                 "messages": fitted,
                 "temperature": temp,
                 "max_tokens": out_tokens,
+                "repeat_penalty": float(sampling["repeat_penalty"]),
             }
-            # Qwen3: по возможности сразу без thinking-блоков
+            seed = int(sampling["seed"])
+            if seed >= 0:
+                kwargs["seed"] = seed
+            # Qwen3: thinking по runtime (в чате блоки всё равно срезает strip_thinking)
             try:
                 result = llm.create_chat_completion(
                     **kwargs,
-                    chat_template_kwargs={"enable_thinking": False},
+                    chat_template_kwargs={
+                        "enable_thinking": bool(sampling["enable_thinking"]),
+                    },
                 )
             except TypeError:
                 result = llm.create_chat_completion(**kwargs)

@@ -1,4 +1,9 @@
-import type { ChatModelsStatus, ComputeSettings, LlmBackendInfo } from "./models";
+import type {
+  ChatModelsStatus,
+  ComputeSettings,
+  LlmBackendInfo,
+  SamplingSettings,
+} from "./models";
 import type { NewsSources } from "./news";
 import type { UserProfileSummary } from "./user";
 
@@ -32,6 +37,7 @@ export type StatusResponse = {
   approve_phrase?: string;
   user?: UserProfileSummary;
   compute?: ComputeSettings;
+  sampling?: SamplingSettings;
   chat_models?: ChatModelsStatus;
   model_roles?: ChatModelsStatus;
   pending_finetune?: boolean;

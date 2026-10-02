@@ -10,6 +10,7 @@ import type {
   NewsTelegramSource,
   PendingResponse,
   ReplyContextItem,
+  SamplingSettings,
   StatusResponse,
 } from "./types";
 
@@ -177,6 +178,32 @@ export async function setCompute(mode: string, gpu_layers?: number | null) {
   if (!res.ok) {
     const detail = data.detail;
     throw new Error(typeof detail === "string" ? detail : "Не удалось сменить compute");
+  }
+  return data;
+}
+
+export async function setSampling(body: {
+  temperature?: number;
+  repeat_penalty?: number;
+  seed?: number;
+  enable_thinking?: boolean;
+  num_ctx?: number;
+}) {
+  const res = await fetch("/api/settings/sampling", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    sampling?: SamplingSettings;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "Не удалось сохранить sampling",
+    );
   }
   return data;
 }

@@ -117,6 +117,24 @@ class Zipka:
     ) -> dict[str, Any]:
         return runtime.set_compute(self, mode, gpu_layers=gpu_layers)
 
+    def set_sampling(
+        self,
+        *,
+        temperature: float | None = None,
+        repeat_penalty: float | None = None,
+        seed: int | None = None,
+        enable_thinking: bool | None = None,
+        num_ctx: int | None = None,
+    ) -> dict[str, Any]:
+        return runtime.set_sampling(
+            self,
+            temperature=temperature,
+            repeat_penalty=repeat_penalty,
+            seed=seed,
+            enable_thinking=enable_thinking,
+            num_ctx=num_ctx,
+        )
+
     def set_chat_model(self, model_id: str) -> dict[str, Any]:
         return self.set_models(chat_gguf=model_id)
 

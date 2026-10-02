@@ -12,6 +12,7 @@ import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Slider from "@mui/material/Slider";
 import Switch from "@mui/material/Switch";
+import TextField from "@mui/material/TextField";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
@@ -35,6 +36,19 @@ type Props = {
   computeBusy: boolean;
   computeMsg: string | null;
   onApplyCompute: () => void;
+  temperature: number;
+  onTemperature: (v: number) => void;
+  repeatPenalty: number;
+  onRepeatPenalty: (v: number) => void;
+  seed: number;
+  onSeed: (v: number) => void;
+  numCtx: number;
+  onNumCtx: (v: number) => void;
+  enableThinking: boolean;
+  onEnableThinking: (v: boolean) => void;
+  samplingBusy: boolean;
+  samplingMsg: string | null;
+  onApplySampling: () => void;
   softDialogue: boolean;
   softDialogueBusy: boolean;
   softDialogueMsg: string | null;
@@ -67,6 +81,19 @@ export function ModelsTab({
   computeBusy,
   computeMsg,
   onApplyCompute,
+  temperature,
+  onTemperature,
+  repeatPenalty,
+  onRepeatPenalty,
+  seed,
+  onSeed,
+  numCtx,
+  onNumCtx,
+  enableThinking,
+  onEnableThinking,
+  samplingBusy,
+  samplingMsg,
+  onApplySampling,
   softDialogue,
   softDialogueBusy,
   softDialogueMsg,
@@ -248,6 +275,111 @@ export function ModelsTab({
         color="text.secondary"
         sx={{ mt: 2, mb: 1, fontWeight: 700 }}
       >
+        Сэмплинг
+      </Typography>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ display: "block", mb: 1 }}
+      >
+        Параметры генерации чата. Сохраняются в runtime. Seed −1 — случайный.
+        Смена num_ctx для GGUF перезагружает модель.
+      </Typography>
+      <Typography variant="caption" color="text.secondary">
+        Temperature: {temperature.toFixed(2)}
+      </Typography>
+      <Slider
+        size="small"
+        min={0}
+        max={2}
+        step={0.05}
+        value={temperature}
+        valueLabelDisplay="auto"
+        onChange={(_e, v) => onTemperature(Array.isArray(v) ? v[0] : v)}
+        sx={{ mb: 1.25, mt: 0.5 }}
+      />
+      <Typography variant="caption" color="text.secondary">
+        Repeat penalty: {repeatPenalty.toFixed(2)}
+      </Typography>
+      <Slider
+        size="small"
+        min={1}
+        max={2}
+        step={0.05}
+        value={repeatPenalty}
+        valueLabelDisplay="auto"
+        onChange={(_e, v) => onRepeatPenalty(Array.isArray(v) ? v[0] : v)}
+        sx={{ mb: 1.25, mt: 0.5 }}
+      />
+      <Typography variant="caption" color="text.secondary">
+        Context (num_ctx): {numCtx}
+      </Typography>
+      <Slider
+        size="small"
+        min={2048}
+        max={32768}
+        step={1024}
+        value={numCtx}
+        valueLabelDisplay="auto"
+        onChange={(_e, v) => onNumCtx(Array.isArray(v) ? v[0] : v)}
+        sx={{ mb: 1.25, mt: 0.5 }}
+      />
+      <TextField
+        fullWidth
+        size="small"
+        type="number"
+        label="Seed (−1 = random)"
+        value={seed}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          onSeed(Number.isFinite(n) ? Math.trunc(n) : -1);
+        }}
+        slotProps={{ htmlInput: { step: 1, min: -1 } }}
+        sx={{ mb: 1.25 }}
+      />
+      <FormControlLabel
+        control={
+          <Switch
+            checked={enableThinking}
+            disabled={busy || samplingBusy}
+            onChange={(_e, checked) => onEnableThinking(checked)}
+          />
+        }
+        label="Thinking (Qwen3)"
+        sx={{ mb: 0.5, ml: 0 }}
+      />
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ display: "block", mb: 1 }}
+      >
+        Вкл — модель думает внутри шаблона; в чат уходит только ответ
+        (thinking-блок срезается).
+      </Typography>
+      {samplingMsg && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+        >
+          {samplingMsg}
+        </Typography>
+      )}
+      <Button
+        fullWidth
+        variant="contained"
+        disabled={busy || samplingBusy}
+        onClick={() => void onApplySampling()}
+        sx={{ mb: 1 }}
+      >
+        {samplingBusy ? "Сохраняю…" : "Применить сэмплинг"}
+      </Button>
+
+      <Typography
+        variant="subtitle2"
+        color="text.secondary"
+        sx={{ mt: 2, mb: 1, fontWeight: 700 }}
+      >
         Soft-evolve
       </Typography>
       <FormControlLabel
@@ -393,6 +525,7 @@ export function ModelsTab({
           <Typography variant="caption" color="text.secondary" component="div">
             Hybrid делит слои между GPU и CPU. Меньше слоёв на GPU → больше
             нагрузка на процессор. Файлы моделей: <code>data/models</code>.
+            Чтобы меньше повторов: подними repeat penalty (1.15–1.3).
           </Typography>
         </AccordionDetails>
       </Accordion>

@@ -10,6 +10,59 @@ from zipka.config import Settings, ensure_data_dirs, get_settings
 
 ComputeMode = Literal["cpu", "gpu", "hybrid"]
 
+
+def _clamp_float(value: Any, *, lo: float, hi: float, default: float) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    if v != v:  # NaN
+        return default
+    return max(lo, min(hi, v))
+
+
+def _clamp_int(value: Any, *, lo: int, hi: int, default: int) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
+def normalize_sampling(data: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Нормализованные параметры сэмплинга / контекста для чата."""
+    src = data or {}
+    return {
+        "temperature": _clamp_float(
+            src.get("temperature", DEFAULT_RUNTIME["temperature"]),
+            lo=0.0,
+            hi=2.0,
+            default=float(DEFAULT_RUNTIME["temperature"]),
+        ),
+        "repeat_penalty": _clamp_float(
+            src.get("repeat_penalty", DEFAULT_RUNTIME["repeat_penalty"]),
+            lo=1.0,
+            hi=2.0,
+            default=float(DEFAULT_RUNTIME["repeat_penalty"]),
+        ),
+        "seed": _clamp_int(
+            src.get("seed", DEFAULT_RUNTIME["seed"]),
+            lo=-1,
+            hi=2_147_483_647,
+            default=int(DEFAULT_RUNTIME["seed"]),
+        ),
+        "enable_thinking": bool(
+            src.get("enable_thinking", DEFAULT_RUNTIME["enable_thinking"])
+        ),
+        "num_ctx": _clamp_int(
+            src.get("num_ctx", DEFAULT_RUNTIME["num_ctx"]),
+            lo=2048,
+            hi=131072,
+            default=int(DEFAULT_RUNTIME["num_ctx"]),
+        ),
+    }
+
+
 DEFAULT_RUNTIME: dict[str, Any] = {
     "compute_mode": "cpu",
     "gpu_layers": 16,
@@ -19,6 +72,12 @@ DEFAULT_RUNTIME: dict[str, Any] = {
     "vision_mmproj": "",
     "soft_evolve_from_dialogue": False,
     "sensors_enabled": False,
+    # sampling (чат GGUF/Ollama)
+    "temperature": 0.7,
+    "repeat_penalty": 1.1,
+    "seed": -1,  # -1 = случайный
+    "enable_thinking": False,
+    "num_ctx": 8192,
 }
 
 
@@ -64,6 +123,7 @@ def load_runtime(settings: Settings | None = None) -> dict[str, Any]:
     out["chat_model_id"] = out["chat_gguf"]
     out["soft_evolve_from_dialogue"] = bool(out.get("soft_evolve_from_dialogue"))
     out["sensors_enabled"] = bool(out.get("sensors_enabled"))
+    out.update(normalize_sampling(out))
     return out
 
 
@@ -92,6 +152,20 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
     if "sensors_enabled" in patch and patch["sensors_enabled"] is not None:
         current["sensors_enabled"] = bool(patch["sensors_enabled"])
 
+    sampling_keys = (
+        "temperature",
+        "repeat_penalty",
+        "seed",
+        "enable_thinking",
+        "num_ctx",
+    )
+    if any(k in patch and patch[k] is not None for k in sampling_keys):
+        merged = {k: current.get(k) for k in sampling_keys}
+        for k in sampling_keys:
+            if k in patch and patch[k] is not None:
+                merged[k] = patch[k]
+        current.update(normalize_sampling(merged))
+
     # legacy API: chat_model_id как id или filename
     if "chat_model_id" in patch and patch["chat_model_id"] is not None:
         raw = str(patch["chat_model_id"]).strip()
@@ -104,9 +178,15 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current.get("soft_evolve_from_dialogue")
     )
     current["sensors_enabled"] = bool(current.get("sensors_enabled"))
+    current.update(normalize_sampling(current))
     path = _runtime_path(settings)
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return current
+
+
+def sampling_status(settings: Settings | None = None) -> dict[str, Any]:
+    """Параметры сэмплинга для status / UI."""
+    return normalize_sampling(load_runtime(settings))
 
 
 def resolve_gpu_layers(settings: Settings | None = None) -> int:

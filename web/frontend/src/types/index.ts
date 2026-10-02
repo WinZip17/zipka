@@ -13,6 +13,7 @@ export type {
   GgufFileInfo,
   LlmBackendInfo,
   ModelRoleBlock,
+  SamplingSettings,
 } from "./models";
 export type {
   NewsAutoStatus,

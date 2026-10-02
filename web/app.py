@@ -17,7 +17,7 @@ from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
 from zipka.evolve.finetune import RESET_CONFIRM_PHRASE as FINETUNE_RESET_PHRASE
 from zipka.evolve.soft import APPROVE_PHRASE as SOFT_APPROVE_PHRASE
 from zipka.reset import CONFIRM_PHRASE
-from zipka.runtime_settings import compute_status, load_runtime
+from zipka.runtime_settings import compute_status, load_runtime, sampling_status
 from zipka.llm.chat_models import models_status
 from zipka.system_limits import format_bytes, max_book_bytes
 
@@ -108,6 +108,14 @@ class ComputeIn(BaseModel):
     gpu_layers: int | None = Field(default=None, ge=1, le=128)
 
 
+class SamplingIn(BaseModel):
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    repeat_penalty: float | None = Field(default=None, ge=1.0, le=2.0)
+    seed: int | None = Field(default=None, ge=-1)
+    enable_thinking: bool | None = None
+    num_ctx: int | None = Field(default=None, ge=2048, le=131072)
+
+
 class ChatModelIn(BaseModel):
     model_id: str | None = Field(
         default=None, description="legacy: filename или pathfinder|qwen25"
@@ -158,6 +166,28 @@ def api_set_compute(body: ComputeIn) -> dict:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, f"Не удалось применить compute: {exc}") from exc
+
+
+@app.get("/api/settings/sampling")
+def api_get_sampling() -> dict:
+    return sampling_status()
+
+
+@app.post("/api/settings/sampling")
+def api_set_sampling(body: SamplingIn) -> dict:
+    _ensure_not_finetuning()
+    try:
+        return agent.set_sampling(
+            temperature=body.temperature,
+            repeat_penalty=body.repeat_penalty,
+            seed=body.seed,
+            enable_thinking=body.enable_thinking,
+            num_ctx=body.num_ctx,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось применить sampling: {exc}") from exc
 
 
 @app.get("/api/settings/chat-model")

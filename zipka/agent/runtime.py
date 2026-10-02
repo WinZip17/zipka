@@ -27,7 +27,7 @@ from zipka.net.learner import NetLearner
 from zipka.net.search import WebSearch
 from zipka.news import NewsDesk
 from zipka.reset import reset_learning_data
-from zipka.runtime_settings import compute_status, save_runtime
+from zipka.runtime_settings import compute_status, sampling_status, save_runtime
 from zipka.safety.policy import SafetyPolicy
 from zipka.sensors.ears import Ears
 from zipka.sensors.eyes import Eyes
@@ -196,6 +196,7 @@ def status(agent: Any) -> dict[str, Any]:
             agent.settings,
             load_info=getattr(agent.llm, "load_info", lambda: None)(),
         ),
+        "sampling": sampling_status(agent.settings),
         "chat_models": roles,
         "model_roles": roles,
         "chat_busy": agent.is_chat_busy(),
@@ -250,6 +251,43 @@ def set_compute(
         "compute": compute_status(agent.settings, load_info=load_info),
         **reloaded,
     }
+
+
+def set_sampling(
+    agent: Any,
+    *,
+    temperature: float | None = None,
+    repeat_penalty: float | None = None,
+    seed: int | None = None,
+    enable_thinking: bool | None = None,
+    num_ctx: int | None = None,
+) -> dict[str, Any]:
+    """Параметры сэмплинга / ctx чата. num_ctx для GGUF требует перезагрузки."""
+    before = sampling_status(agent.settings)
+    patch: dict[str, Any] = {}
+    if temperature is not None:
+        patch["temperature"] = temperature
+    if repeat_penalty is not None:
+        patch["repeat_penalty"] = repeat_penalty
+    if seed is not None:
+        patch["seed"] = seed
+    if enable_thinking is not None:
+        patch["enable_thinking"] = enable_thinking
+    if num_ctx is not None:
+        patch["num_ctx"] = num_ctx
+    if not patch:
+        raise ValueError(
+            "Укажи temperature / repeat_penalty / seed / enable_thinking / num_ctx"
+        )
+    save_runtime(patch, agent.settings)
+    after = sampling_status(agent.settings)
+    out: dict[str, Any] = {"ok": True, "sampling": after}
+    if int(before.get("num_ctx") or 0) != int(after.get("num_ctx") or 0):
+        out.update(reload_llm(agent))
+        out["reloaded"] = True
+    else:
+        out["reloaded"] = False
+    return out
 
 
 def set_models(
