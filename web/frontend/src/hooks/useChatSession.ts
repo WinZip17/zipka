@@ -73,21 +73,41 @@ export function useChatSession() {
   const sessionQuery = useQuery({
     queryKey: queryKeys.session,
     queryFn: fetchSessionSnapshot,
-    refetchInterval: SESSION_POLL_MS,
+    refetchInterval: (query) =>
+      query.state.data?.status ? SESSION_POLL_MS : 2000,
     refetchIntervalInBackground: false,
     staleTime: 1000,
+    retry: 8,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   });
 
   const status = sessionQuery.data?.status ?? null;
   const pending = sessionQuery.data?.pending ?? null;
+  /** Первый успешный /api/status получен — можно показывать UI. */
+  const statusReady = sessionQuery.isSuccess && status != null;
+  const statusBootError =
+    !statusReady && sessionQuery.isError
+      ? sessionQuery.error instanceof Error
+        ? sessionQuery.error.message
+        : "Не удалось загрузить статус"
+      : null;
   const finetuneBusy = status?.finetune?.state === "running";
+
+  // Пока первого status нет — продолжаем опрос (RQ может остановить interval на error)
+  useEffect(() => {
+    if (statusReady) return;
+    const id = window.setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.session });
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [statusReady, queryClient]);
 
   const newsQuery = useQuery({
     queryKey: queryKeys.newsAuto,
     queryFn: fetchNewsAuto,
     refetchInterval: NEWS_POLL_MS,
     refetchIntervalInBackground: false,
-    enabled: !finetuneBusy,
+    enabled: statusReady && !finetuneBusy,
     staleTime: 1500,
   });
 
@@ -401,6 +421,8 @@ export function useChatSession() {
   return {
     messages,
     status,
+    statusReady,
+    statusBootError,
     pending,
     stagedFile,
     setStagedFile,

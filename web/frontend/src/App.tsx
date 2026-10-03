@@ -1,4 +1,6 @@
 import Box from "@mui/material/Box";
+import Backdrop from "@mui/material/Backdrop";
+import CircularProgress from "@mui/material/CircularProgress";
 import Drawer from "@mui/material/Drawer";
 import IconButton from "@mui/material/IconButton";
 import Paper from "@mui/material/Paper";
@@ -16,6 +18,8 @@ export default function App() {
   const {
     messages,
     status,
+    statusReady,
+    statusBootError,
     pending,
     stagedFile,
     setStagedFile,
@@ -43,11 +47,14 @@ export default function App() {
   const { open: sideOpen, toggle: toggleSide, setOpen: setSideOpen, isDesktop } =
     useSidePanelOpen();
 
+  const uiLocked = !statusReady;
+  const inputDisabled = busy || finetuneBusy || uiLocked;
+
   const sidePanel = (
     <SidePanel
       status={status}
       pending={pending}
-      busy={busy}
+      busy={busy || uiLocked}
       eyesOn={!!status?.eyes}
       earsOn={!!status?.ears}
       archiveMember={archiveMember}
@@ -63,6 +70,7 @@ export default function App() {
 
   return (
     <Box
+      aria-busy={uiLocked}
       sx={{
         maxWidth: sideOpen && isDesktop ? 1100 : 900,
         mx: "auto",
@@ -72,8 +80,39 @@ export default function App() {
         flexDirection: "column",
         minHeight: 0,
         transition: "max-width 0.2s ease",
+        pointerEvents: uiLocked ? "none" : "auto",
+        userSelect: uiLocked ? "none" : "auto",
       }}
     >
+      <Backdrop
+        open={uiLocked}
+        sx={{
+          zIndex: (theme) => theme.zIndex.modal + 2,
+          color: "#e8f0e9",
+          backgroundColor: "rgba(12, 18, 15, 0.82)",
+          flexDirection: "column",
+          gap: 2,
+          pointerEvents: "auto",
+        }}
+      >
+        <CircularProgress color="inherit" size={44} thickness={4} />
+        <Typography
+          variant="body1"
+          sx={{ fontWeight: 600, fontFamily: '"Manrope", sans-serif' }}
+        >
+          Загружаю Зипку…
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ maxWidth: 320, textAlign: "center" }}
+        >
+          {statusBootError
+            ? `${statusBootError}. Пробую снова…`
+            : "Жду ответ /api/status"}
+        </Typography>
+      </Backdrop>
+
       <Stack
         direction="row"
         spacing={1.5}
@@ -101,24 +140,27 @@ export default function App() {
           </Typography>
         </Box>
         <Tooltip title={sideOpen ? "Скрыть панель" : "Показать панель"} arrow>
-          <IconButton
-            aria-label={sideOpen ? "Скрыть панель" : "Показать панель"}
-            aria-pressed={sideOpen}
-            onClick={toggleSide}
-            size="small"
-            sx={{
-              border: 1,
-              borderColor: sideOpen ? "primary.main" : "divider",
-              bgcolor: sideOpen ? "rgba(200, 240, 122, 0.12)" : "#24332c",
-              color: sideOpen ? "primary.main" : "text.primary",
-              "&:hover": {
-                bgcolor: sideOpen ? "rgba(200, 240, 122, 0.2)" : "#2c3d34",
+          <span>
+            <IconButton
+              aria-label={sideOpen ? "Скрыть панель" : "Показать панель"}
+              aria-pressed={sideOpen}
+              onClick={toggleSide}
+              disabled={uiLocked}
+              size="small"
+              sx={{
+                border: 1,
                 borderColor: sideOpen ? "primary.main" : "divider",
-              },
-            }}
-          >
-            <ViewSidebarOutlinedIcon fontSize="small" />
-          </IconButton>
+                bgcolor: sideOpen ? "rgba(200, 240, 122, 0.12)" : "#24332c",
+                color: sideOpen ? "primary.main" : "text.primary",
+                "&:hover": {
+                  bgcolor: sideOpen ? "rgba(200, 240, 122, 0.2)" : "#2c3d34",
+                  borderColor: sideOpen ? "primary.main" : "divider",
+                },
+              }}
+            >
+              <ViewSidebarOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
         </Tooltip>
       </Stack>
 
@@ -138,11 +180,13 @@ export default function App() {
         <Paper
           elevation={0}
           onDragOver={(e) => {
+            if (uiLocked) return;
             e.preventDefault();
             setDropActive(true);
           }}
           onDragLeave={() => setDropActive(false)}
           onDrop={(e) => {
+            if (uiLocked) return;
             e.preventDefault();
             setDropActive(false);
             const file = e.dataTransfer.files?.[0];
@@ -159,6 +203,7 @@ export default function App() {
             outline: dropActive ? "2px dashed" : "none",
             outlineColor: "primary.main",
             outlineOffset: -4,
+            opacity: uiLocked ? 0.55 : 1,
           }}
         >
           <MessageList
@@ -167,14 +212,16 @@ export default function App() {
             loadingOlder={loadingOlder}
             onLoadOlder={() => void loadOlderHistory()}
             thinking={
-              finetuneBusy
-                ? "Идёт дообучение…"
-                : thinking || (!busy ? newsThinking : null)
+              uiLocked
+                ? null
+                : finetuneBusy
+                  ? "Идёт дообучение…"
+                  : thinking || (!busy ? newsThinking : null)
             }
             onReply={(b) => setReplyTo(b)}
           />
           <Composer
-            disabled={busy || finetuneBusy}
+            disabled={inputDisabled}
             stagedFile={stagedFile}
             onStageFile={setStagedFile}
             onSend={(msg) => void onSend(msg)}
@@ -193,6 +240,7 @@ export default function App() {
               overflow: "hidden",
               display: "flex",
               flexDirection: "column",
+              opacity: uiLocked ? 0.55 : 1,
             }}
           >
             {sidePanel}
@@ -203,7 +251,7 @@ export default function App() {
       {!isDesktop ? (
         <Drawer
           anchor="right"
-          open={sideOpen}
+          open={sideOpen && !uiLocked}
           onClose={() => setSideOpen(false)}
           slotProps={{
             paper: {

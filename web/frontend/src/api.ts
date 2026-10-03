@@ -20,6 +20,9 @@ async function parseJson<T>(res: Response): Promise<T> {
 
 export async function fetchStatus(): Promise<StatusResponse> {
   const res = await fetch("/api/status");
+  if (!res.ok) {
+    throw new Error(`Не удалось получить /api/status (${res.status})`);
+  }
   return parseJson(res);
 }
 
