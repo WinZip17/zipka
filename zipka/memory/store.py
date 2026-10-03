@@ -55,7 +55,62 @@ class MemoryStore:
     def read_json(path: Path, default: Any = None) -> Any:
         if not path.exists():
             return default
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeError):
+            return default
+
+    @staticmethod
+    def iter_jsonl(path: Path) -> list[dict[str, Any]]:
+        """Прочитать JSONL: одна запись на строку; битые строки пропускаем.
+
+        Также терпит pretty-printed объекты (несколько строк на запись).
+        """
+        if not path.exists():
+            return []
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        rows: list[dict[str, Any]] = []
+        # быстрый путь: классический JSONL
+        line_ok = True
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                line_ok = False
+                break
+            if isinstance(row, dict):
+                rows.append(row)
+        if line_ok:
+            return rows
+
+        # fallback: поток JSON-объектов (pretty-print / ручное редактирование)
+        rows = []
+        dec = json.JSONDecoder()
+        idx = 0
+        while idx < len(text):
+            while idx < len(text) and text[idx].isspace():
+                idx += 1
+            if idx >= len(text):
+                break
+            try:
+                obj, end = dec.raw_decode(text, idx)
+            except json.JSONDecodeError:
+                # пропустить до следующей '{'
+                nxt = text.find("{", idx + 1)
+                if nxt < 0:
+                    break
+                idx = nxt
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+            idx = end
+        return rows
 
     def append_jsonl(self, path: Path, record: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,18 +128,9 @@ class MemoryStore:
     def recent_notes(
         self, limit: int = 20, kind: str | None = None
     ) -> list[dict[str, Any]]:
-        if not self.notes_path.exists():
-            return []
-        rows: list[dict[str, Any]] = []
-        with self.notes_path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                if kind and row.get("kind") != kind:
-                    continue
-                rows.append(row)
+        rows = self.iter_jsonl(self.notes_path)
+        if kind:
+            rows = [row for row in rows if row.get("kind") == kind]
         return rows[-limit:]
 
     def get_skills(self) -> list[str]:
@@ -138,21 +184,15 @@ class MemoryStore:
     ) -> dict[str, Any]:
         """Пагинация истории: последние `limit` или порция перед индексом `before`."""
         rows: list[dict[str, Any]] = []
-        if self.chat_path.exists():
-            with self.chat_path.open(encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    row = json.loads(line)
-                    item: dict[str, Any] = {
-                        "role": row.get("role", "assistant"),
-                        "content": row.get("content", ""),
-                        "ts": row.get("ts"),
-                    }
-                    if isinstance(row.get("reply_to"), dict):
-                        item["reply_to"] = row["reply_to"]
-                    rows.append(item)
+        for row in self.iter_jsonl(self.chat_path):
+            item: dict[str, Any] = {
+                "role": row.get("role", "assistant"),
+                "content": row.get("content", ""),
+                "ts": row.get("ts"),
+            }
+            if isinstance(row.get("reply_to"), dict):
+                item["reply_to"] = row["reply_to"]
+            rows.append(item)
         total = len(rows)
         if before is None:
             end = total
