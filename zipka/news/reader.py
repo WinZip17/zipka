@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -211,7 +212,9 @@ class NewsDesk:
         from zipka.news.store import NewsStore
 
         self.store = NewsStore(self.root)
-        self._ingest_lock = self.store._lock  # общий lock append/search/prune
+        # Отдельный lock: нельзя держать store._lock на время HTTP/LLM —
+        # иначе /api/status и настройки блокируются на весь ingest.
+        self._ingest_lock = threading.Lock()
         self._auto_running = False
         self._auto_phase = ""
         self._pending_after_chat = False

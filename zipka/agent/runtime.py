@@ -54,6 +54,54 @@ def _books_rag_stats(agent: Any) -> dict[str, Any]:
         return {"available": False, "error": str(exc)}
 
 
+def _peek_load_info(llm: Any) -> dict[str, Any] | None:
+    """load_info без router-lock — status не должен ждать news.summarize."""
+    client = getattr(llm, "_chat_client", None)
+    if client is not None and hasattr(client, "load_info"):
+        try:
+            info = client.load_info()
+            return info if isinstance(info, dict) else None
+        except Exception:
+            return None
+    fn = getattr(llm, "load_info", None)
+    if not callable(fn):
+        return None
+    try:
+        info = fn()
+        return info if isinstance(info, dict) else None
+    except Exception:
+        return None
+
+
+def _news_status_safe(agent: Any) -> dict[str, Any]:
+    """Новостной блок status: не валить весь /api/status при сбое store."""
+    try:
+        sources = agent.news.load_sources()
+    except Exception as exc:
+        sources = {"error": str(exc)}
+    items = 0
+    storage: dict[str, Any] = {}
+    try:
+        items = int(agent.news.items_count())
+    except Exception:
+        pass
+    try:
+        storage = agent.news.storage_stats()
+    except Exception as exc:
+        storage = {"error": str(exc)}
+    auto: dict[str, Any] = {}
+    try:
+        st = agent.news.auto_status()
+        auto = {
+            "running": bool(st.get("running")),
+            "message": st.get("message"),
+            "phase": st.get("phase"),
+        }
+    except Exception:
+        pass
+    return {"sources": sources, "items": items, "storage": storage, "auto": auto}
+
+
 def unload_inference_models(agent: Any) -> None:
     """Освободить RAM/VRAM перед тяжёлым LoRA (чат-GGUF / vision)."""
     import gc
@@ -191,11 +239,7 @@ def status(agent: Any) -> dict[str, Any]:
                 "active_checkpoint"
             ),
         },
-        "news": {
-            "sources": agent.news.load_sources(),
-            "items": agent.news.items_count(),
-            "storage": agent.news.storage_stats(),
-        },
+        "news": _news_status_safe(agent),
         "books_rag": _books_rag_stats(agent),
         "mind": agent.mind.load(),
         "proactive": agent.proactive.rare_ping_status(),
@@ -208,7 +252,7 @@ def status(agent: Any) -> dict[str, Any]:
         "user": agent.user.summary_for_ui(),
         "compute": compute_status(
             agent.settings,
-            load_info=getattr(agent.llm, "load_info", lambda: None)(),
+            load_info=_peek_load_info(agent.llm),
         ),
         "sampling": sampling_status(agent.settings),
         "chat_models": roles,

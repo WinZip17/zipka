@@ -67,6 +67,12 @@ export type StatusResponse = {
   news?: {
     sources?: NewsSources;
     items?: number;
+    storage?: Record<string, unknown>;
+    auto?: {
+      running?: boolean;
+      message?: string | null;
+      phase?: string | null;
+    };
   };
   proactive?: {
     today?: string;

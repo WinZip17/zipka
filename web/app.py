@@ -602,10 +602,18 @@ class NewsIntervalIn(BaseModel):
 
 @app.get("/api/news/sources")
 def api_news_sources() -> dict:
+    try:
+        items = agent.news.items_count()
+    except Exception:
+        items = 0
+    try:
+        storage = agent.news.storage_stats()
+    except Exception as exc:
+        storage = {"error": str(exc)}
     return {
         "sources": agent.news.load_sources(),
-        "items": agent.news.items_count(),
-        "storage": agent.news.storage_stats(),
+        "items": items,
+        "storage": storage,
         "auto": agent.news.auto_status(),
     }
 

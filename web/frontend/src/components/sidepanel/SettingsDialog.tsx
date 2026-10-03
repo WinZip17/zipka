@@ -140,7 +140,8 @@ export function SettingsDialog({
     finetuneInfo?.status?.state === "running" ||
     status?.finetune?.state === "running";
   // Пока идёт дообучение — блокируем остальные действия в панели
-  const busy = chatBusy || finetuneRunning;
+  // Пока /api/status не пришёл — не даём жалть по пустым селектам
+  const busy = chatBusy || finetuneRunning || !status;
   const finetuneStartedMs = parseUtcMs(
     finetuneInfo?.status?.started_at || status?.finetune?.started_at,
   );
@@ -236,6 +237,9 @@ export function SettingsDialog({
       if (data.auto?.source_interval_options?.length) {
         setNewsSourceIntervalOptions(data.auto.source_interval_options);
       }
+      if (data.auto?.running) {
+        setNewsMsg(data.auto.message || "Обновляю новости…");
+      }
       return data;
     } catch (err) {
       setNewsMsg(err instanceof Error ? err.message : String(err));
@@ -243,11 +247,23 @@ export function SettingsDialog({
     }
   };
 
+  const autoNewsRunning = Boolean(status?.news?.auto?.running);
+  const newsUiBusy = newsBusy || autoNewsRunning;
+
   useEffect(() => {
     if (!open) return;
     void refreshFinetune();
     void refreshNews();
   }, [open]);
+
+  // Пока авто-ingest идёт — подтягивать источники/счётчик, не оставлять пустой таб
+  useEffect(() => {
+    if (!open || !autoNewsRunning) return;
+    const id = window.setInterval(() => {
+      void refreshNews();
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [open, autoNewsRunning]);
 
   useEffect(() => {
     if (!open) return;
@@ -746,6 +762,12 @@ export function SettingsDialog({
           minHeight: 280,
         }}
       >
+        {!status ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            Загружаю настройки…
+            {autoNewsRunning ? " (сейчас обновляются новости)" : ""}
+          </Typography>
+        ) : null}
         {settingsTab === 0 && (
           <ModelsTab
             status={status}
@@ -805,7 +827,7 @@ export function SettingsDialog({
           <NewsTab
             status={status}
             busy={busy}
-            newsBusy={newsBusy}
+            newsBusy={newsUiBusy}
             newsMsg={newsMsg}
             newsItems={newsItems}
             newsRss={newsRss}
