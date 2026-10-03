@@ -56,19 +56,101 @@ _YA_MASC: tuple[tuple[str, str], ...] = (
 )
 
 _YA_PAIRS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(rf"(?i)\b(я)\s+({masc})\b"), fem) for masc, fem in _YA_MASC
+    (
+        # «я рад» / «я рад(а)» → «я рада» (модель часто пишет скобочный род)
+        re.compile(rf"(?i)\b(я)\s+({masc})(?:\([аa]\))?(?=\W|$)"),
+        fem,
+    )
+    for masc, fem in _YA_MASC
 ]
 
 # Короткие фразы без «я» в начале реплики / после пунктуации
 _LEAD_PAIRS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"(?i)(^|[.!?…]\s*|[\n—–-]\s*)(рад)\b"), "рада"),
-    (re.compile(r"(?i)(^|[.!?…]\s*|[\n—–-]\s*)(готов)\b"), "готова"),
-    (re.compile(r"(?i)(^|[.!?…]\s*|[\n—–-]\s*)(понял)\b"), "поняла"),
-    (re.compile(r"(?i)(^|[.!?…]\s*|[\n—–-]\s*)(согласен)\b"), "согласна"),
-    (re.compile(r"(?i)(^|[.!?…]\s*|[\n—–-]\s*)(уверен)\b"), "уверена"),
-    (re.compile(r"(?i)(^|[.!?…]\s*|[\n—–-]\s*)(счастлив)\b"), "счастлива"),
-    (re.compile(r"(?i)(^|[.!?…]\s*|[\n—–-]\s*)(удивл[её]н)\b"), "удивлена"),
+    (
+        re.compile(rf"(?i)(^|[.!?…]\s*|[\n—–-]\s*)({masc})(?:\([аa]\))?(?=\W|$)"),
+        fem,
+    )
+    for masc, fem in (
+        (r"рад", "рада"),
+        (r"готов", "готова"),
+        (r"понял", "поняла"),
+        (r"согласен", "согласна"),
+        (r"уверен", "уверена"),
+        (r"счастлив", "счастлива"),
+        (r"удивл[её]н", "удивлена"),
+    )
 ]
+
+# Хвост вида «готова(а)» / «рада(а)» после частичной замены
+_REDUNDANT_FEM_HEDGE_RE = re.compile(r"(?i)([ая])\([аa]\)")
+# Оставшийся скобочный род у мужской основы, если пары выше не сработали
+_MASC_HEDGE_RE = re.compile(
+    r"(?i)\b("
+    + "|".join(masc for masc, _ in _YA_MASC)
+    + r")\([аa]\)"
+)
+_MASC_TO_FEM: dict[str, str] = {}
+for _masc, _fem in _YA_MASC:
+    _MASC_TO_FEM[_masc.lower()] = _fem
+    if "[её]" in _masc:
+        _stem = _masc.lower().replace("[её]", "")
+        _MASC_TO_FEM[_stem + "е"] = _fem
+        _MASC_TO_FEM[_stem + "ё"] = _fem
+    else:
+        # ключ без regex-мета для lookup по реальному слову
+        _MASC_TO_FEM[re.sub(r"\[её\]", "е", _masc.lower())] = _fem
+
+
+def _match_case(src: str, replacement: str) -> str:
+    """Сохранить регистр первой буквы исходного слова."""
+    if not src:
+        return replacement
+    if src.isupper():
+        return replacement.upper()
+    if src[0].isupper():
+        return replacement[:1].upper() + replacement[1:]
+    return replacement.lower()
+
+
+def _strip_gender_hedges(text: str) -> str:
+    """Убрать «рад(а)» / «Рада(а)» — скобочный род из генерации или недозамены."""
+
+    def _masc_hedge(m: re.Match[str]) -> str:
+        stem = m.group(1)
+        fem = _MASC_TO_FEM.get(stem.lower()) or _MASC_TO_FEM.get(
+            stem.lower().replace("ё", "е")
+        )
+        if not fem:
+            return stem
+        return _match_case(stem, fem)
+
+    out = _MASC_HEDGE_RE.sub(_masc_hedge, text)
+    out = _REDUNDANT_FEM_HEDGE_RE.sub(r"\1", out)
+    return out
+
+
+def enforce_feminine(text: str) -> str:
+    """Поправить типичные мужские формы, когда Зипка говорит о себе."""
+    if not text:
+        return ""
+    out = _strip_gender_hedges(text)
+
+    for pattern, fem in _YA_PAIRS:
+        out = pattern.sub(
+            lambda m, f=fem: f"{m.group(1)} {_match_case(m.group(2), f)}",
+            out,
+        )
+
+    for pattern, fem in _LEAD_PAIRS:
+        out = pattern.sub(
+            lambda m, f=fem: f"{m.group(1)}{_match_case(m.group(2), f)}",
+            out,
+        )
+
+    # на случай «я рада(а)» после замены внутри других мест
+    out = _strip_gender_hedges(out)
+    return out
+
 
 # «Ты …» в женском роде → мужской (когда собеседник — мужчина).
 # Не трогаем формы о самой Зипке («я …»).
@@ -106,38 +188,6 @@ _INSTRUCTION_ECHO = (
 
 _gender_cache: tuple[float, str] | None = None
 Gender = Literal["male", "female", ""]
-
-
-def _match_case(src: str, replacement: str) -> str:
-    """Сохранить регистр первой буквы исходного слова."""
-    if not src:
-        return replacement
-    if src.isupper():
-        return replacement.upper()
-    if src[0].isupper():
-        return replacement[:1].upper() + replacement[1:]
-    return replacement.lower()
-
-
-def enforce_feminine(text: str) -> str:
-    """Поправить типичные мужские формы, когда Зипка говорит о себе."""
-    if not text:
-        return ""
-    out = text
-
-    for pattern, fem in _YA_PAIRS:
-        out = pattern.sub(
-            lambda m, f=fem: f"{m.group(1)} {_match_case(m.group(2), f)}",
-            out,
-        )
-
-    for pattern, fem in _LEAD_PAIRS:
-        out = pattern.sub(
-            lambda m, f=fem: f"{m.group(1)}{_match_case(m.group(2), f)}",
-            out,
-        )
-
-    return out
 
 
 def enforce_addressee_gender(text: str, gender: Gender | str) -> str:
