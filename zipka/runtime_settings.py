@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -232,11 +234,160 @@ def hybrid_explain(
     )
 
 
+def list_cuda_devices() -> list[dict[str, Any]]:
+    """Список NVIDIA GPU через nvidia-smi (Intel Iris сюда не попадает)."""
+    if not shutil.which("nvidia-smi"):
+        return []
+    try:
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in (proc.stdout or "").splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 2:
+            continue
+        try:
+            idx = int(parts[0])
+        except ValueError:
+            continue
+        vram = None
+        if len(parts) >= 3:
+            try:
+                vram = int(float(parts[2]))
+            except ValueError:
+                vram = None
+        out.append({"index": idx, "name": parts[1], "vram_mb": vram})
+    return out
+
+
+def pick_preferred_cuda_device(
+    devices: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Выбрать дискретный NVIDIA (RTX/GTX/Quadro), не Intel."""
+    devices = devices if devices is not None else list_cuda_devices()
+    if not devices:
+        return None
+
+    def score(d: dict[str, Any]) -> tuple[int, int]:
+        name = str(d.get("name") or "").lower()
+        # Intel never in nvidia-smi; всё равно отсекаем на всякий
+        if "intel" in name or "iris" in name or "uhd" in name:
+            return (-100, int(d.get("vram_mb") or 0))
+        s = 0
+        if any(x in name for x in ("rtx", "gtx", "quadro", "tesla", "geforce")):
+            s += 10
+        if "laptop" in name or "mobile" in name:
+            s += 1  # всё равно ок для ноутбука
+        return (s, int(d.get("vram_mb") or 0))
+
+    return max(devices, key=score)
+
+
+def _prefer_windows_high_performance_gpu() -> str | None:
+    """Windows: GpuPreference=2 (High performance) для текущего python.exe.
+
+    Иначе при включённой iGPU (Iris) гибридная графика может слать процесс
+    на Intel, а CUDA-память — на RTX.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+
+        exe = str(Path(sys.executable).resolve())
+        key_path = r"Software\Microsoft\DirectX\UserGpuPreferences"
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            # 2 = High performance (дискретная), 1 = Power saving (iGPU)
+            winreg.SetValueEx(key, exe, 0, winreg.REG_SZ, "GpuPreference=2;")
+        return exe
+    except OSError:
+        return None
+
+
+def apply_cuda_device_preference(
+    *,
+    mode: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Перед загрузкой GGUF зафиксировать дискретный NVIDIA.
+
+    - CUDA_DEVICE_ORDER=PCI_BUS_ID
+    - CUDA_VISIBLE_DEVICES=<предпочитаемый индекс> (если пользователь не задал)
+    - Windows High performance GPU для python.exe
+    """
+    mode = (mode or "").lower()
+    if mode == "cpu":
+        return {"applied": False, "reason": "cpu_mode"}
+
+    devices = list_cuda_devices()
+    preferred = pick_preferred_cuda_device(devices)
+    info: dict[str, Any] = {
+        "applied": False,
+        "devices": devices,
+        "preferred": preferred,
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "windows_gpu_pref": None,
+    }
+    if preferred is None:
+        info["reason"] = "no_nvidia"
+        return info
+
+    os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+    # Не затирать явный выбор пользователя, кроме force
+    if force or "CUDA_VISIBLE_DEVICES" not in os.environ:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(preferred["index"]))
+        info["cuda_visible_devices"] = os.environ["CUDA_VISIBLE_DEVICES"]
+        info["applied"] = True
+    else:
+        info["reason"] = "user_cuda_visible_devices"
+
+    win_exe = _prefer_windows_high_performance_gpu()
+    if win_exe:
+        info["windows_gpu_pref"] = win_exe
+        info["applied"] = True
+
+    return info
+
+
+def llama_gpu_kwargs(*, n_gpu_layers: int) -> dict[str, Any]:
+    """Аргументы Llama для одного дискретного GPU (без split по устройствам)."""
+    kwargs: dict[str, Any] = {"n_gpu_layers": int(n_gpu_layers)}
+    if int(n_gpu_layers) == 0:
+        return kwargs
+    try:
+        import llama_cpp
+
+        split_none = getattr(llama_cpp, "LLAMA_SPLIT_MODE_NONE", 0)
+    except Exception:
+        split_none = 0
+    kwargs["main_gpu"] = 0  # после CUDA_VISIBLE_DEVICES всегда локальный 0
+    kwargs["split_mode"] = split_none
+    kwargs["tensor_split"] = None
+    return kwargs
+
+
 def detect_gpu_capability() -> dict[str, Any]:
     """Может ли текущий llama-cpp реально оффлоадить на GPU."""
     llama_gpu = False
     nvidia = False
     note = ""
+    devices = list_cuda_devices()
+    preferred = pick_preferred_cuda_device(devices)
     try:
         from zipka.llm.gguf_client import probe_llama_cpp
 
@@ -257,8 +408,9 @@ def detect_gpu_capability() -> dict[str, Any]:
     except Exception:
         note = "Не удалось проверить llama-cpp-python."
 
-    try:
-        if shutil.which("nvidia-smi"):
+    nvidia = bool(devices) or bool(shutil.which("nvidia-smi"))
+    if not devices and shutil.which("nvidia-smi"):
+        try:
             proc = subprocess.run(
                 ["nvidia-smi", "-L"],
                 capture_output=True,
@@ -267,11 +419,20 @@ def detect_gpu_capability() -> dict[str, Any]:
                 check=False,
             )
             nvidia = proc.returncode == 0 and bool((proc.stdout or "").strip())
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     if not note:
-        if llama_gpu:
+        if llama_gpu and preferred:
+            vram = preferred.get("vram_mb")
+            vram_bit = f", {vram} МБ" if vram else ""
+            note = (
+                f"GPU offload: {preferred.get('name')} "
+                f"(CUDA{preferred.get('index')}{vram_bit}). "
+                "Слои считаются на NVIDIA; в Диспетчере смотри график «CUDA» у RTX, "
+                "не «3D» у Intel Iris."
+            )
+        elif llama_gpu:
             note = "GPU offload доступен (можно cpu / gpu / hybrid)."
         elif nvidia:
             note = (
@@ -285,9 +446,16 @@ def detect_gpu_capability() -> dict[str, Any]:
                 "Сейчас только CPU (типично для win_amd64 CPU-колеса). "
                 "Режимы GPU/hybrid включатся после установки CUDA-сборки."
             )
+        if preferred and sys.platform == "win32":
+            note += (
+                " При двух GPU (Iris+RTX) python.exe должен быть на "
+                "«Высокая производительность» в Параметры → Дисплей → Графика."
+            )
     return {
         "llama_gpu_offload": llama_gpu,
         "nvidia_detected": nvidia,
+        "devices": devices,
+        "preferred_device": preferred,
         "note": note,
     }
 

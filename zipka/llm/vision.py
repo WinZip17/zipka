@@ -9,7 +9,12 @@ from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
 from zipka.llm.gguf_client import find_gguf_files, probe_llama_cpp
 from zipka.llm.sanitize import strip_thinking
-from zipka.runtime_settings import load_runtime, resolve_gpu_layers
+from zipka.runtime_settings import (
+    apply_cuda_device_preference,
+    llama_gpu_kwargs,
+    load_runtime,
+    resolve_gpu_layers,
+)
 
 # id → файлы для скачивания (лёгкая vision ~3GB, влезает после выгрузки чата)
 VISION_PROFILES: dict[str, dict[str, Any]] = {
@@ -262,6 +267,10 @@ class VisionGgufClient:
 
         handler = _make_handler(pair["handler"], pair["mmproj_path"])
         n_gpu = int(resolve_gpu_layers(self.settings))
+        if n_gpu != 0:
+            apply_cuda_device_preference(
+                mode=str(load_runtime(self.settings).get("compute_mode") or "gpu")
+            )
         # Moondream train ctx = 2048; больше — overflow / хуже качество
         want_ctx = max(2048, int(self.settings.zipka_gguf_ctx))
         if pair["handler"] == "moondream2":
@@ -270,14 +279,15 @@ class VisionGgufClient:
             "model_path": str(pair["model_path"]),
             "chat_handler": handler,
             "n_ctx": want_ctx,
-            "n_gpu_layers": n_gpu if n_gpu != 0 else 0,
             "logits_all": True,
             "verbose": False,
+            **llama_gpu_kwargs(n_gpu_layers=n_gpu if n_gpu != 0 else 0),
         }
         try:
             self._llm = Llama(**kwargs)
         except TypeError:
-            kwargs.pop("logits_all", None)
+            for key in ("logits_all", "split_mode", "main_gpu", "tensor_split"):
+                kwargs.pop(key, None)
             self._llm = Llama(**kwargs)
         self._pair = pair
         return self._llm

@@ -6,7 +6,13 @@ from typing import Any
 from zipka.config import Settings, get_settings
 from zipka.llm.base import LlmError
 from zipka.llm.sanitize import strip_thinking
-from zipka.runtime_settings import resolve_gpu_layers, sampling_status
+from zipka.runtime_settings import (
+    apply_cuda_device_preference,
+    llama_gpu_kwargs,
+    load_runtime,
+    resolve_gpu_layers,
+    sampling_status,
+)
 
 
 def probe_llama_cpp() -> tuple[bool, str]:
@@ -205,18 +211,24 @@ class GgufClient:
             ) from exc
 
         self.unload()
+        if want_gpu != 0:
+            apply_cuda_device_preference(
+                mode=str(load_runtime(self.settings).get("compute_mode") or "gpu")
+            )
         kwargs: dict[str, Any] = {
             "model_path": str(self.model_path),
             "n_ctx": want_ctx,
-            "n_gpu_layers": want_gpu,
             "n_threads": want_threads,
             "n_threads_batch": want_threads,
             "verbose": False,
+            **llama_gpu_kwargs(n_gpu_layers=want_gpu),
         }
         try:
             self._llm = Llama(**kwargs)
         except TypeError:
-            kwargs.pop("n_threads_batch", None)
+            # старые сборки без split_mode / main_gpu / n_threads_batch
+            for key in ("n_threads_batch", "split_mode", "main_gpu", "tensor_split"):
+                kwargs.pop(key, None)
             self._llm = Llama(**kwargs)
         self._loaded_ctx = want_ctx
         self._loaded_gpu = want_gpu

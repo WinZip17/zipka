@@ -237,6 +237,18 @@ export function ModelsTab({
           {status.compute.note}
         </Alert>
       )}
+      {status?.compute?.preferred_device?.name && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", mb: 1 }}
+        >
+          Дискретный GPU: {status.compute.preferred_device.name}
+          {status.compute.preferred_device.vram_mb
+            ? ` · ${status.compute.preferred_device.vram_mb} МБ`
+            : ""}
+        </Typography>
+      )}
       {status?.compute?.load?.n_cpu_layers != null && (
         <Typography
           variant="caption"
@@ -442,7 +454,7 @@ export function ModelsTab({
       >
         Master-switch для глаз и ушей. Выкл — блока «Сенсоры» на главной
         нет, камера/микрофон погашены. Вкл — блок появляется, сенсоры по
-        умолчанию выключены (включаются кнопками или фразой).
+        умолчанию выключены (включаются переключателями или фразой).
       </Typography>
       {sensorsFeatureMsg && (
         <Typography

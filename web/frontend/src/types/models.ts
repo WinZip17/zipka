@@ -59,6 +59,16 @@ export type ComputeSettings = {
   llama_gpu_offload?: boolean;
   nvidia_detected?: boolean;
   note?: string;
+  devices?: Array<{
+    index?: number;
+    name?: string;
+    vram_mb?: number | null;
+  }>;
+  preferred_device?: {
+    index?: number;
+    name?: string;
+    vram_mb?: number | null;
+  } | null;
   load?: {
     n_layer?: number | null;
     n_gpu_layers_requested?: number | null;

@@ -296,10 +296,13 @@ def set_compute(
     gpu_layers: int | None = None,
 ) -> dict[str, Any]:
     """Переключить CPU / GPU / hybrid и перезагрузить LLM."""
+    from zipka.runtime_settings import apply_cuda_device_preference
+
     patch: dict[str, Any] = {"compute_mode": mode}
     if gpu_layers is not None:
         patch["gpu_layers"] = gpu_layers
     save_runtime(patch, agent.settings)
+    gpu_pref = apply_cuda_device_preference(mode=mode, force=True)
     reloaded = reload_llm(agent)
     load_info = None
     if hasattr(agent.llm, "load_info"):
@@ -307,6 +310,7 @@ def set_compute(
     return {
         "ok": True,
         "compute": compute_status(agent.settings, load_info=load_info),
+        "gpu_preference": gpu_pref,
         **reloaded,
     }
 

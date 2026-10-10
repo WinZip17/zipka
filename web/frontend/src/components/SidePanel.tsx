@@ -15,6 +15,7 @@ import InputLabel from "@mui/material/InputLabel";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Stack from "@mui/material/Stack";
+import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
@@ -357,9 +358,9 @@ export function SidePanel({
           <SectionTitle>Сенсоры</SectionTitle>
           <Stack
             direction="row"
-            spacing={0.75}
+            spacing={2}
             useFlexGap
-            sx={{ mb: 1, flexWrap: "wrap" }}
+            sx={{ mb: 1, flexWrap: "wrap", alignItems: "center" }}
           >
             <Tooltip
               title={
@@ -370,18 +371,48 @@ export function SidePanel({
               arrow
               enterDelay={400}
             >
-              <span>
-                <Button
-                  size="small"
-                  variant={eyesOn ? "contained" : "outlined"}
-                  disabled={busy}
-                  onClick={() => void toggleEyes()}
-                  sx={sensorBtnSx(eyesOn)}
-                >
-                  Глаза
-                </Button>
-              </span>
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={eyesOn}
+                    disabled={busy}
+                    onChange={() => void toggleEyes()}
+                  />
+                }
+                label="Глаза"
+                sx={{ mr: 0, ml: 0 }}
+              />
             </Tooltip>
+            <Tooltip
+              title={
+                earsOn
+                  ? "Выключить уши — микрофон не используется"
+                  : "Включить уши: Зипка может слушать"
+              }
+              arrow
+              enterDelay={400}
+            >
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={earsOn}
+                    disabled={busy}
+                    onChange={() => void toggleEars()}
+                  />
+                }
+                label="Уши"
+                sx={{ mr: 0, ml: 0 }}
+              />
+            </Tooltip>
+          </Stack>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            useFlexGap
+            sx={{ mb: 1, flexWrap: "wrap" }}
+          >
             {(
               [
                 [
@@ -406,7 +437,7 @@ export function SidePanel({
                   <Button
                     size="small"
                     variant="outlined"
-                    disabled={busy}
+                    disabled={busy || !eyesOn}
                     onClick={() => void eyeCapture(action)}
                     sx={sensorBtnSx(false)}
                   >
@@ -415,34 +446,6 @@ export function SidePanel({
                 </span>
               </Tooltip>
             ))}
-          </Stack>
-          <Stack
-            direction="row"
-            spacing={0.75}
-            useFlexGap
-            sx={{ flexWrap: "wrap" }}
-          >
-            <Tooltip
-              title={
-                earsOn
-                  ? "Выключить уши — микрофон не используется"
-                  : "Включить уши: Зипка может слушать"
-              }
-              arrow
-              enterDelay={400}
-            >
-              <span>
-                <Button
-                  size="small"
-                  variant={earsOn ? "contained" : "outlined"}
-                  disabled={busy}
-                  onClick={() => void toggleEars()}
-                  sx={sensorBtnSx(earsOn)}
-                >
-                  Уши
-                </Button>
-              </span>
-            </Tooltip>
             <Tooltip
               title={
                 earPhase === "recording"

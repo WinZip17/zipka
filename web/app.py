@@ -17,7 +17,12 @@ from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
 from zipka.evolve.finetune import RESET_CONFIRM_PHRASE as FINETUNE_RESET_PHRASE
 from zipka.evolve.soft import APPROVE_PHRASE as SOFT_APPROVE_PHRASE
 from zipka.reset import CONFIRM_PHRASE
-from zipka.runtime_settings import compute_status, load_runtime, sampling_status
+from zipka.runtime_settings import (
+    apply_cuda_device_preference,
+    compute_status,
+    load_runtime,
+    sampling_status,
+)
 from zipka.llm.chat_models import models_status
 from zipka.system_limits import format_bytes, max_book_bytes
 
@@ -58,6 +63,18 @@ def _news_scheduler_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    try:
+        mode = str(load_runtime().get("compute_mode") or "cpu")
+        if mode != "cpu":
+            pref = apply_cuda_device_preference(mode=mode, force=False)
+            if pref.get("preferred"):
+                _log.info(
+                    "CUDA preference: %s (visible=%s)",
+                    pref["preferred"].get("name"),
+                    pref.get("cuda_visible_devices"),
+                )
+    except Exception as exc:
+        _log.warning("CUDA preference: %s", exc)
     _news_stop.clear()
     threading.Thread(
         target=_news_scheduler_loop,
