@@ -12,6 +12,7 @@ import { Composer } from "./components/Composer";
 import { MessageList } from "./components/MessageList";
 import { SidePanel } from "./components/SidePanel";
 import { useChatSession } from "./hooks/useChatSession";
+import { useEarHold } from "./hooks/useEarHold";
 import { useSidePanelOpen } from "./hooks/useSidePanelOpen";
 
 export default function App() {
@@ -49,6 +50,15 @@ export default function App() {
 
   const uiLocked = !statusReady;
   const inputDisabled = busy || finetuneBusy || uiLocked;
+  const earsOn = Boolean(status?.sensors_enabled && status?.ears);
+  const { earPhase, startEarHold, endEarHold } = useEarHold({
+    earsOn,
+    busy: inputDisabled,
+    onBubble: addBubble,
+    onBusy: onBusyFromPanel,
+    onThinking: setThinking,
+    onRefresh: () => void refreshStatus(),
+  });
 
   const sidePanel = (
     <SidePanel
@@ -227,6 +237,10 @@ export default function App() {
             onSend={(msg) => void onSend(msg)}
             replyTo={replyTo}
             onClearReply={() => setReplyTo(null)}
+            earsOn={earsOn}
+            earPhase={earPhase}
+            onEarPointerDown={(e) => void startEarHold(e)}
+            onEarPointerUp={endEarHold}
           />
         </Paper>
 

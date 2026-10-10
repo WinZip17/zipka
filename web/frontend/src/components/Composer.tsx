@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import CloseIcon from "@mui/icons-material/Close";
+import MicIcon from "@mui/icons-material/Mic";
+import MicNoneIcon from "@mui/icons-material/MicNone";
 import ReplyIcon from "@mui/icons-material/Reply";
 import SendIcon from "@mui/icons-material/Send";
 import Box from "@mui/material/Box";
@@ -12,6 +15,7 @@ import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { FILE_ACCEPT } from "../api";
+import type { EarPhase } from "../hooks/useEarHold";
 import type { Bubble } from "../types";
 
 type Props = {
@@ -21,6 +25,11 @@ type Props = {
   onSend: (message: string) => void;
   replyTo?: Bubble | null;
   onClearReply?: () => void;
+  /** Уши включены — показать кнопку микрофона рядом с отправкой */
+  earsOn?: boolean;
+  earPhase?: EarPhase;
+  onEarPointerDown?: (e: ReactPointerEvent<HTMLButtonElement>) => void;
+  onEarPointerUp?: () => void;
 };
 
 function previewText(text: string, max = 100): string {
@@ -29,6 +38,14 @@ function previewText(text: string, max = 100): string {
   return `${one.slice(0, max - 1)}…`;
 }
 
+const actionBtnSx = {
+  bgcolor: "#007BFF",
+  color: "#fff",
+  borderRadius: 2.5,
+  "&:hover": { bgcolor: "#0056b3" },
+  "&.Mui-disabled": { bgcolor: "#24332c", color: "text.secondary" },
+} as const;
+
 export function Composer({
   disabled,
   stagedFile,
@@ -36,6 +53,10 @@ export function Composer({
   onSend,
   replyTo,
   onClearReply,
+  earsOn = false,
+  earPhase = "idle",
+  onEarPointerDown,
+  onEarPointerUp,
 }: Props) {
   const [text, setText] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -53,6 +74,20 @@ export function Composer({
     onSend(text.trim());
     setText("");
   };
+
+  const earBusy =
+    earPhase === "transcribing" || earPhase === "replying";
+  const recording = earPhase === "recording";
+  const micDisabled =
+    Boolean(disabled && earPhase === "idle") || earBusy || !earsOn;
+
+  const micTip = recording
+    ? "Отпусти — закончить запись и распознать"
+    : earPhase === "transcribing"
+      ? "Распознаю речь…"
+      : earPhase === "replying"
+        ? "Думаю над ответом…"
+        : "Зажми и говори, отпусти — распознаю и отвечу";
 
   return (
     <Box sx={{ borderTop: 1, borderColor: "divider", flexShrink: 0 }}>
@@ -175,7 +210,9 @@ export function Composer({
             placeholder={
               replyTo
                 ? "Продолжить эту ветку… Enter — отправить"
-                : "Сообщение… Enter — отправить, Shift+Enter — новая строка"
+                : earsOn
+                  ? "Сообщение… или зажми микрофон"
+                  : "Сообщение… Enter — отправить, Shift+Enter — новая строка"
             }
             value={text}
             disabled={disabled}
@@ -194,17 +231,50 @@ export function Composer({
             }}
           />
         </Paper>
+        {earsOn ? (
+          <Tooltip title={micTip} arrow>
+            <span>
+              <IconButton
+                type="button"
+                aria-label="Микрофон"
+                disabled={micDisabled}
+                onPointerDown={(e) => onEarPointerDown?.(e)}
+                onPointerUp={onEarPointerUp}
+                onPointerCancel={onEarPointerUp}
+                onLostPointerCapture={onEarPointerUp}
+                onContextMenu={(e) => e.preventDefault()}
+                sx={{
+                  ...actionBtnSx,
+                  touchAction: "none",
+                  userSelect: "none",
+                  ...(recording
+                    ? {
+                        bgcolor: "#c45c5c",
+                        animation: "zipka-mic-pulse 1.1s ease-in-out infinite",
+                        "@keyframes zipka-mic-pulse": {
+                          "0%, 100%": { filter: "brightness(1)" },
+                          "50%": { filter: "brightness(1.15)" },
+                        },
+                        "&:hover": { bgcolor: "#b04e4e" },
+                      }
+                    : {}),
+                }}
+              >
+                {recording ? (
+                  <MicIcon fontSize="small" />
+                ) : (
+                  <MicNoneIcon fontSize="small" />
+                )}
+              </IconButton>
+            </span>
+          </Tooltip>
+        ) : null}
         <IconButton
           type="submit"
           color="primary"
+          aria-label="Отправить"
           disabled={disabled || (!stagedFile && !text.trim())}
-          sx={{
-            bgcolor: "#007BFF",
-            color: "#fff",
-            borderRadius: 2.5,
-            "&:hover": { bgcolor: "#0056b3" },
-            "&.Mui-disabled": { bgcolor: "#24332c", color: "text.secondary" },
-          }}
+          sx={actionBtnSx}
         >
           <SendIcon fontSize="small" />
         </IconButton>
@@ -216,7 +286,9 @@ export function Composer({
       >
         {replyTo
           ? "Ответ подхватит эту ветку как приоритетный контекст"
-          : "Текст сообщения = комментарий к файлу"}
+          : earsOn
+            ? "Микрофон: зажми и говори · текст = комментарий к файлу"
+            : "Текст сообщения = комментарий к файлу"}
       </Typography>
     </Box>
   );
