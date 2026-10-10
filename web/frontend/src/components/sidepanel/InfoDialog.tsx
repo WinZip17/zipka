@@ -281,6 +281,15 @@ export function InfoDialog({
             <>
               <InfoLine label="Глаза" value={eyesOn ? "вкл" : "выкл"} variant="inline" />
               <InfoLine label="Уши" value={earsOn ? "вкл" : "выкл"} variant="inline" />
+              <InfoLine
+                label="Whisper"
+                variant="inline"
+                value={
+                  status?.whisper
+                    ? `${status.whisper.model || "—"} · ${status.whisper.device || "—"}/${status.whisper.compute_type || "—"}`
+                    : "—"
+                }
+              />
             </>
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>

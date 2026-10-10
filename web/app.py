@@ -154,6 +154,10 @@ class SensorsEnabledIn(BaseModel):
     enabled: bool
 
 
+class WhisperModelIn(BaseModel):
+    model: str = Field(description="tiny | base | small | medium | large-v3")
+
+
 def _spa_index() -> Path:
     index = DIST / "index.html"
     if not index.exists():
@@ -270,6 +274,7 @@ def api_get_sensors_feature() -> dict:
         "enabled": sensors_feature_enabled(),
         "eyes": agent.eyes.enabled,
         "ears": agent.ears.enabled,
+        "whisper": agent.ears.status_info(),
     }
 
 
@@ -280,6 +285,18 @@ def api_set_sensors_feature(body: SensorsEnabledIn) -> dict:
     except Exception as exc:
         raise HTTPException(
             400, f"Не удалось сохранить сенсоры: {exc}"
+        ) from exc
+
+
+@app.post("/api/settings/whisper")
+def api_set_whisper_model(body: WhisperModelIn) -> dict:
+    try:
+        return agent.set_whisper_model(body.model)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            400, f"Не удалось сохранить Whisper: {exc}"
         ) from exc
 
 

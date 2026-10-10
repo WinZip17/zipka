@@ -25,6 +25,7 @@ import {
   setSampling,
   setSoftEvolveDialogue,
   setSensorsEnabled,
+  setWhisperModel,
   startFinetune,
 } from "../../api";
 import {
@@ -102,6 +103,16 @@ export function SettingsDialog({
   const [sensorsFeatureMsg, setSensorsFeatureMsg] = useState<string | null>(
     null,
   );
+  const [whisperModel, setWhisperModelLocal] = useState("small");
+  const [whisperOptions, setWhisperOptions] = useState<string[]>([
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3",
+  ]);
+  const [whisperBusy, setWhisperBusy] = useState(false);
+  const [whisperMsg, setWhisperMsg] = useState<string | null>(null);
   const [notifyVolumePct, setNotifyVolumePct] = useState(() =>
     Math.round(getNotifyVolume() * 100),
   );
@@ -186,6 +197,15 @@ export function SettingsDialog({
       setSoftDialogue(status.soft_evolve_from_dialogue);
     }
   }, [status?.soft_evolve_from_dialogue]);
+
+  useEffect(() => {
+    const w = status?.whisper;
+    if (!w) return;
+    if (typeof w.model === "string" && w.model) setWhisperModelLocal(w.model);
+    if (Array.isArray(w.options) && w.options.length) {
+      setWhisperOptions(w.options);
+    }
+  }, [status?.whisper?.model, status?.whisper?.options]);
 
   useEffect(() => {
     const roles = status?.chat_models || status?.model_roles;
@@ -637,6 +657,30 @@ export function SettingsDialog({
     }
   };
 
+  const applyWhisperModel = async (model: string) => {
+    const prev = whisperModel;
+    setWhisperBusy(true);
+    setWhisperMsg(null);
+    setWhisperModelLocal(model);
+    try {
+      const data = await setWhisperModel(model);
+      const next = data.whisper?.model || model;
+      setWhisperModelLocal(next);
+      if (Array.isArray(data.whisper?.options) && data.whisper.options.length) {
+        setWhisperOptions(data.whisper.options);
+      }
+      const device = data.whisper?.device || "—";
+      const ctype = data.whisper?.compute_type || "—";
+      setWhisperMsg(`Whisper: ${next} (${device}/${ctype}).`);
+      onRefresh();
+    } catch (err) {
+      setWhisperModelLocal(prev);
+      setWhisperMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWhisperBusy(false);
+    }
+  };
+
   const applyModels = async () => {
     setModelsBusy(true);
     setModelsMsg(null);
@@ -808,6 +852,11 @@ export function SettingsDialog({
             sensorsFeatureBusy={sensorsFeatureBusy}
             sensorsFeatureMsg={sensorsFeatureMsg}
             onApplySensorsFeature={applySensorsFeature}
+            whisperModel={whisperModel}
+            whisperOptions={whisperOptions}
+            whisperBusy={whisperBusy}
+            whisperMsg={whisperMsg}
+            onApplyWhisperModel={applyWhisperModel}
             notifyVolumePct={notifyVolumePct}
             onNotifyVolumePct={(pct) => {
               setNotifyVolumePct(pct);

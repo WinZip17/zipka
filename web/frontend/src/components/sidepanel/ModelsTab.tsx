@@ -57,6 +57,11 @@ type Props = {
   sensorsFeatureBusy: boolean;
   sensorsFeatureMsg: string | null;
   onApplySensorsFeature: (enabled: boolean) => void;
+  whisperModel: string;
+  whisperOptions: string[];
+  whisperBusy: boolean;
+  whisperMsg: string | null;
+  onApplyWhisperModel: (model: string) => void;
   notifyVolumePct: number;
   onNotifyVolumePct: (pct: number) => void;
   notifySoundMsg: string | null;
@@ -102,6 +107,11 @@ export function ModelsTab({
   sensorsFeatureBusy,
   sensorsFeatureMsg,
   onApplySensorsFeature,
+  whisperModel,
+  whisperOptions,
+  whisperBusy,
+  whisperMsg,
+  onApplyWhisperModel,
   notifyVolumePct,
   onNotifyVolumePct,
   notifySoundMsg,
@@ -463,6 +473,44 @@ export function ModelsTab({
           sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
         >
           {sensorsFeatureMsg}
+        </Typography>
+      )}
+      <FormControl fullWidth size="small" sx={{ mb: 0.75, mt: 0.5 }}>
+        <InputLabel id="whisper-model-label">Whisper (уши)</InputLabel>
+        <Select
+          labelId="whisper-model-label"
+          label="Whisper (уши)"
+          value={whisperModel || "small"}
+          disabled={busy || whisperBusy || finetuneRunning}
+          onChange={(e) => void onApplyWhisperModel(String(e.target.value))}
+        >
+          {(whisperOptions.length
+            ? whisperOptions
+            : ["tiny", "base", "small", "medium", "large-v3"]
+          ).map((opt) => (
+            <MenuItem key={`whisper-${opt}`} value={opt}>
+              {opt}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ display: "block", mb: 1 }}
+      >
+        Размер модели STT. По умолчанию small. Устройство:{" "}
+        {status?.whisper?.device || "—"} /{" "}
+        {status?.whisper?.compute_type || "—"}.
+        {status?.whisper?.loaded ? " Загружена." : ""}
+      </Typography>
+      {whisperMsg && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ display: "block", whiteSpace: "pre-wrap", mb: 1 }}
+        >
+          {whisperMsg}
         </Typography>
       )}
 

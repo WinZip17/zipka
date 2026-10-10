@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -8,9 +9,94 @@ import numpy as np
 
 from zipka.config import Settings, get_settings
 
+_log = logging.getLogger("zipka.ears")
+
 _SAMPLE_RATE = 16000
 _MAX_RECORD_SEC = 60.0
 _MIN_RECORD_SEC = 0.25
+_TRIM_PAD_SEC = 0.12
+_SILENCE_RMS = 0.008
+_PEAK_TARGET = 0.9
+_WHISPER_SIZES = ("tiny", "base", "small", "medium", "large-v3")
+_INITIAL_PROMPT = (
+    "Разговорный русский. Имена: Зипка, Юра, WinZip. "
+    "Локальный ИИ, код, книги, новости."
+)
+
+
+def normalize_whisper_model(raw: str | None, *, default: str = "small") -> str:
+    name = str(raw or "").strip().lower()
+    if name in _WHISPER_SIZES:
+        return name
+    # aliases
+    if name in {"large", "large-v2"}:
+        return "large-v3"
+    return default if default in _WHISPER_SIZES else "small"
+
+
+def resolve_whisper_device() -> tuple[str, str]:
+    """(device, compute_type): CUDA float16 или CPU int8."""
+    try:
+        import ctranslate2
+
+        types = {
+            str(x).lower()
+            for x in ctranslate2.get_supported_compute_types("cuda")
+        }
+        if types:
+            if "float16" in types:
+                return "cuda", "float16"
+            if "int8_float16" in types:
+                return "cuda", "int8_float16"
+            return "cuda", sorted(types)[0]
+    except Exception:
+        pass
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda", "float16"
+    except Exception:
+        pass
+    return "cpu", "int8"
+
+
+def preprocess_audio(
+    audio: np.ndarray,
+    *,
+    sample_rate: int = _SAMPLE_RATE,
+) -> np.ndarray:
+    """Trim тишины по краям, затем peak-normalize (~0.9)."""
+    mono = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if mono.size == 0:
+        return mono
+    # trim до DC: иначе вычитание среднего поднимает «тишину» над порогом
+    win = max(1, int(sample_rate * 0.02))
+    pad = int(sample_rate * _TRIM_PAD_SEC)
+    n = mono.size
+    if n >= win * 2:
+
+        def _rms_at(i: int) -> float:
+            chunk = mono[i : i + win]
+            return float(np.sqrt(np.mean(chunk * chunk))) if chunk.size else 0.0
+
+        start = 0
+        while start + win <= n and _rms_at(start) < _SILENCE_RMS:
+            start += win
+        end = n
+        while end - win >= start and _rms_at(end - win) < _SILENCE_RMS:
+            end -= win
+        start = max(0, start - pad)
+        end = min(n, end + pad)
+        if end > start:
+            mono = mono[start:end]
+    if mono.size == 0:
+        return mono.astype(np.float32, copy=False)
+    mono = mono - float(np.mean(mono))
+    peak = float(np.max(np.abs(mono))) if mono.size else 0.0
+    if peak > 1e-6:
+        mono = mono * (_PEAK_TARGET / peak)
+    return mono.astype(np.float32, copy=False)
 
 
 class Ears:
@@ -23,6 +109,7 @@ class Ears:
         self.settings = settings or get_settings()
         self.enabled = False
         self._model: Any = None
+        self._model_key: tuple[str, str, str] | None = None
         self._lock = threading.Lock()
         self._recording = False
         self._chunks: list[np.ndarray] = []
@@ -33,7 +120,9 @@ class Ears:
 
     def on(self) -> str:
         self.enabled = True
-        return "Уши включены. Зажми «Слушать», говори, отпусти — распознаю."
+        return (
+            "Уши включены. Зажми микрофон в чате, говори, отпусти — распознаю."
+        )
 
     def off(self) -> str:
         with self._lock:
@@ -42,6 +131,25 @@ class Ears:
             self._pending_audio = None
         self.enabled = False
         return "Уши выключены."
+
+    def unload_model(self) -> None:
+        """Сбросить кэш Whisper (после смены размера в настройках)."""
+        with self._lock:
+            self._model = None
+            self._model_key = None
+
+    def status_info(self) -> dict[str, Any]:
+        from zipka.runtime_settings import resolve_whisper_model
+
+        model = resolve_whisper_model(self.settings)
+        device, ctype = resolve_whisper_device()
+        return {
+            "model": model,
+            "device": device,
+            "compute_type": ctype,
+            "loaded": self._model is not None,
+            "options": list(_WHISPER_SIZES),
+        }
 
     @property
     def is_recording(self) -> bool:
@@ -57,7 +165,7 @@ class Ears:
 
         with self._lock:
             if self._recording:
-                raise RuntimeError("Уже идёт запись. Отпусти «Слушать».")
+                raise RuntimeError("Уже идёт запись. Отпусти микрофон.")
             self._chunks = []
             self._pending_audio = None
             self._started_at = time.monotonic()
@@ -129,7 +237,7 @@ class Ears:
                 self._pending_audio = None
                 elapsed = max(_MIN_RECORD_SEC, mono.size / float(_SAMPLE_RATE))
             else:
-                raise RuntimeError("Запись не шла. Зажми «Слушать» и говори.")
+                raise RuntimeError("Запись не шла. Зажми микрофон и говори.")
             self._pending_audio = None
 
         if elapsed < _MIN_RECORD_SEC or mono.size < int(
@@ -155,20 +263,56 @@ class Ears:
             raise
 
     def _transcribe(self, audio: np.ndarray, sample_rate: int) -> str:
+        prepared = preprocess_audio(audio, sample_rate=sample_rate)
+        if prepared.size < int(sample_rate * _MIN_RECORD_SEC):
+            return "(тишина)"
+        rms = float(np.sqrt(np.mean(prepared * prepared))) if prepared.size else 0.0
+        if rms < _SILENCE_RMS * 0.5:
+            return "(тишина)"
+
         model = self._get_model()
-        segments, _info = model.transcribe(audio, language="ru")
+        segments, _info = model.transcribe(
+            prepared,
+            language="ru",
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 400},
+            beam_size=5,
+            best_of=5,
+            temperature=0.0,
+            condition_on_previous_text=False,
+            initial_prompt=_INITIAL_PROMPT,
+            without_timestamps=True,
+        )
         text = " ".join(seg.text.strip() for seg in segments).strip()
         return text or "(тишина)"
 
     def _get_model(self) -> Any:
-        if self._model is None:
-            try:
-                from faster_whisper import WhisperModel
-            except ImportError as exc:
-                raise RuntimeError(
-                    "faster-whisper не установлен. pip install faster-whisper"
-                ) from exc
-            self._model = WhisperModel(
-                self.settings.zipka_whisper_model, device="cpu", compute_type="int8"
-            )
+        from zipka.runtime_settings import resolve_whisper_model
+
+        name = resolve_whisper_model(self.settings)
+        device, ctype = resolve_whisper_device()
+        key = (name, device, ctype)
+        if self._model is not None and self._model_key == key:
+            return self._model
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "faster-whisper не установлен. pip install faster-whisper"
+            ) from exc
+        try:
+            self._model = WhisperModel(name, device=device, compute_type=ctype)
+            self._model_key = key
+            _log.info("Whisper loaded: %s device=%s compute=%s", name, device, ctype)
+        except Exception as exc:
+            if device != "cpu":
+                _log.warning(
+                    "Whisper CUDA failed (%s), fallback CPU int8", exc
+                )
+                self._model = WhisperModel(
+                    name, device="cpu", compute_type="int8"
+                )
+                self._model_key = (name, "cpu", "int8")
+            else:
+                raise
         return self._model

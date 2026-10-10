@@ -294,12 +294,36 @@ export async function setSensorsEnabled(enabled: boolean) {
     sensors_enabled?: boolean;
     eyes?: boolean;
     ears?: boolean;
+    whisper?: StatusResponse["whisper"];
     detail?: string;
   }>(res);
   if (!res.ok) {
     const detail = data.detail;
     throw new Error(
       typeof detail === "string" ? detail : "Не удалось сохранить сенсоры",
+    );
+  }
+  return data;
+}
+
+export async function setWhisperModel(model: string) {
+  const res = await fetch("/api/settings/whisper", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  });
+  const data = await parseJson<{
+    ok?: boolean;
+    whisper?: StatusResponse["whisper"];
+    sensors_enabled?: boolean;
+    eyes?: boolean;
+    ears?: boolean;
+    detail?: string;
+  }>(res);
+  if (!res.ok) {
+    const detail = data.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : "Не удалось сохранить Whisper",
     );
   }
   return data;

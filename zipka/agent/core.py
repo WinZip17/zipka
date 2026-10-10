@@ -152,6 +152,9 @@ class Zipka:
     def set_sensors_enabled(self, enabled: bool) -> dict[str, Any]:
         return runtime.set_sensors_enabled(self, enabled)
 
+    def set_whisper_model(self, model: str) -> dict[str, Any]:
+        return runtime.set_whisper_model(self, model)
+
     # --- prompting / chat ---
 
     def build_messages(

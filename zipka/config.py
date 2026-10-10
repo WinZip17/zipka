@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     zipka_search_result_limit: int = 8
     # open = читать найденные URL (SSRF-защита остаётся); allowlist = только net_allowlist
     zipka_search_fetch_mode: str = "open"
-    zipka_whisper_model: str = "base"
+    zipka_whisper_model: str = "small"
 
     @property
     def data_dir(self) -> Path:

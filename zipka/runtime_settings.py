@@ -74,6 +74,7 @@ DEFAULT_RUNTIME: dict[str, Any] = {
     "vision_mmproj": "",
     "soft_evolve_from_dialogue": False,
     "sensors_enabled": False,
+    "whisper_model": "small",
     # sampling (чат GGUF/Ollama)
     "temperature": 0.7,
     "repeat_penalty": 1.1,
@@ -92,15 +93,24 @@ def _runtime_path(settings: Settings | None = None) -> Path:
 
 
 def load_runtime(settings: Settings | None = None) -> dict[str, Any]:
+    settings = settings or get_settings()
     path = _runtime_path(settings)
-    if not path.exists():
-        return dict(DEFAULT_RUNTIME)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return dict(DEFAULT_RUNTIME)
-    if not isinstance(data, dict):
-        return dict(DEFAULT_RUNTIME)
+    data: dict[str, Any] | None = None
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data = raw
+        except (OSError, json.JSONDecodeError):
+            data = None
+    if data is None:
+        out = dict(DEFAULT_RUNTIME)
+        from zipka.sensors.ears import normalize_whisper_model
+
+        out["whisper_model"] = normalize_whisper_model(
+            settings.zipka_whisper_model, default="small"
+        )
+        return out
     out = dict(DEFAULT_RUNTIME)
     out.update(data)
     mode = str(out.get("compute_mode") or "cpu").lower()
@@ -125,6 +135,15 @@ def load_runtime(settings: Settings | None = None) -> dict[str, Any]:
     out["chat_model_id"] = out["chat_gguf"]
     out["soft_evolve_from_dialogue"] = bool(out.get("soft_evolve_from_dialogue"))
     out["sensors_enabled"] = bool(out.get("sensors_enabled"))
+    from zipka.sensors.ears import normalize_whisper_model
+
+    # runtime.json явно → иначе ZIPKA_WHISPER_MODEL / Settings
+    whisper_src = (
+        data["whisper_model"]
+        if "whisper_model" in data
+        else settings.zipka_whisper_model
+    )
+    out["whisper_model"] = normalize_whisper_model(whisper_src, default="small")
     out.update(normalize_sampling(out))
     return out
 
@@ -153,6 +172,15 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current["soft_evolve_from_dialogue"] = bool(patch["soft_evolve_from_dialogue"])
     if "sensors_enabled" in patch and patch["sensors_enabled"] is not None:
         current["sensors_enabled"] = bool(patch["sensors_enabled"])
+    if "whisper_model" in patch and patch["whisper_model"] is not None:
+        from zipka.sensors.ears import normalize_whisper_model
+
+        current["whisper_model"] = normalize_whisper_model(
+            patch["whisper_model"],
+            default=str(
+                (settings or get_settings()).zipka_whisper_model or "small"
+            ),
+        )
 
     sampling_keys = (
         "temperature",
@@ -180,6 +208,12 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
         current.get("soft_evolve_from_dialogue")
     )
     current["sensors_enabled"] = bool(current.get("sensors_enabled"))
+    from zipka.sensors.ears import normalize_whisper_model
+
+    current["whisper_model"] = normalize_whisper_model(
+        current.get("whisper_model"),
+        default=str((settings or get_settings()).zipka_whisper_model or "small"),
+    )
     current.update(normalize_sampling(current))
     path = _runtime_path(settings)
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -189,6 +223,17 @@ def save_runtime(patch: dict[str, Any], settings: Settings | None = None) -> dic
 def sampling_status(settings: Settings | None = None) -> dict[str, Any]:
     """Параметры сэмплинга для status / UI."""
     return normalize_sampling(load_runtime(settings))
+
+
+def resolve_whisper_model(settings: Settings | None = None) -> str:
+    """Размер Whisper: runtime.json → ZIPKA_WHISPER_MODEL / Settings."""
+    from zipka.sensors.ears import normalize_whisper_model
+
+    settings = settings or get_settings()
+    return normalize_whisper_model(
+        load_runtime(settings).get("whisper_model"),
+        default=str(settings.zipka_whisper_model or "small"),
+    )
 
 
 def resolve_gpu_layers(settings: Settings | None = None) -> int:

@@ -47,6 +47,13 @@ export type StatusResponse = {
   soft_approve_phrase?: string;
   soft_evolve_from_dialogue?: boolean;
   sensors_enabled?: boolean;
+  whisper?: {
+    model?: string;
+    device?: string;
+    compute_type?: string;
+    loaded?: boolean;
+    options?: string[];
+  };
   finetune?: {
     state?: string;
     job_id?: string;

@@ -223,6 +223,7 @@ def status(agent: Any) -> dict[str, Any]:
         "eyes": agent.eyes.enabled,
         "ears": agent.ears.enabled,
         "sensors_enabled": sensors_feature_enabled(agent.settings),
+        "whisper": agent.ears.status_info(),
         "pending_patch": agent.hard.has_pending(),
         "approve_phrase": APPROVE_PHRASE,
         "pending_soft": agent.soft.has_pending(),
@@ -398,6 +399,28 @@ def set_sensors_enabled(agent: Any, enabled: bool) -> dict[str, Any]:
         force_sensors_off(agent)
     return {
         "ok": True,
+        "sensors_enabled": sensors_feature_enabled(agent.settings),
+        "eyes": bool(getattr(agent.eyes, "enabled", False)),
+        "ears": bool(getattr(agent.ears, "enabled", False)),
+        "whisper": agent.ears.status_info(),
+    }
+
+
+def set_whisper_model(agent: Any, model: str) -> dict[str, Any]:
+    """Размер Whisper STT; сбрасывает кэш модели ушей."""
+    from zipka.runtime_settings import resolve_whisper_model
+    from zipka.sensors.ears import normalize_whisper_model
+
+    name = normalize_whisper_model(model, default="small")
+    prev = resolve_whisper_model(agent.settings)
+    save_runtime({"whisper_model": name}, agent.settings)
+    if name != prev:
+        unload = getattr(agent.ears, "unload_model", None)
+        if callable(unload):
+            unload()
+    return {
+        "ok": True,
+        "whisper": agent.ears.status_info(),
         "sensors_enabled": sensors_feature_enabled(agent.settings),
         "eyes": bool(getattr(agent.eyes, "enabled", False)),
         "ears": bool(getattr(agent.ears, "enabled", False)),
