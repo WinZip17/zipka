@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from zipka.agent import Zipka
+from zipka.torch_compat import quiet_torch_noise
 from zipka.evolve.hard import APPROVE_PHRASE
 from zipka.evolve.finetune import APPROVE_PHRASE as FINETUNE_APPROVE_PHRASE
 from zipka.evolve.finetune import RESET_CONFIRM_PHRASE as FINETUNE_RESET_PHRASE
@@ -30,6 +31,7 @@ ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "frontend" / "dist"
 _log = logging.getLogger("zipka.web")
 
+quiet_torch_noise()
 agent = Zipka()
 _news_stop = threading.Event()
 

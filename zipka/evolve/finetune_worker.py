@@ -749,6 +749,12 @@ def export_gguf(job: dict[str, Any], data_dir: Path, ckpt_dir: Path) -> dict[str
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        from zipka.torch_compat import quiet_torch_noise
+
+        quiet_torch_noise()
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="Zipka LoRA finetune worker")
     parser.add_argument("--job", required=True, help="path to job json")
     parser.add_argument("--data-dir", required=True, help="Zipka data dir")

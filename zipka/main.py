@@ -482,6 +482,9 @@ def web(
     """Запуск web UI."""
     import uvicorn
 
+    from zipka.torch_compat import quiet_torch_noise
+
+    quiet_torch_noise()
     console.print(f"Web UI: http://{host}:{port}")
     uvicorn.run("web.app:app", host=host, port=port, reload=False)
 

@@ -52,6 +52,9 @@ def resolve_whisper_device() -> tuple[str, str]:
     except Exception:
         pass
     try:
+        from zipka.torch_compat import quiet_torch_noise
+
+        quiet_torch_noise()
         import torch
 
         if torch.cuda.is_available():
@@ -270,7 +273,16 @@ class Ears:
         if rms < _SILENCE_RMS * 0.5:
             return "(тишина)"
 
+        from zipka.ai_activity import announce_ai
+        from zipka.runtime_settings import resolve_whisper_model
+
+        announce_ai(
+            "уши STT",
+            resolve_whisper_model(self.settings),
+            f"sec={prepared.size / float(sample_rate):.1f}",
+        )
         model = self._get_model()
+        announce_ai("инференс Whisper", resolve_whisper_model(self.settings))
         segments, _info = model.transcribe(
             prepared,
             language="ru",
@@ -300,6 +312,9 @@ class Ears:
             raise RuntimeError(
                 "faster-whisper не установлен. pip install faster-whisper"
             ) from exc
+        from zipka.ai_activity import announce_ai
+
+        announce_ai("загрузка Whisper", name, f"device={device}", f"compute={ctype}")
         try:
             self._model = WhisperModel(name, device=device, compute_type=ctype)
             self._model_key = key

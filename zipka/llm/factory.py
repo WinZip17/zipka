@@ -59,10 +59,26 @@ class _RoleProxy:
         self._router.unload_role(self._role)
 
     def chat(self, *args: Any, **kwargs: Any) -> str:
+        from zipka.ai_activity import announce_ai
+
+        announce_ai(
+            "чат",
+            f"роль={self._role}",
+            f"модель={self.model_name or '?'}",
+            f"backend={self.backend}",
+        )
         with self._router._lock:
             return self._router._activate(self._role).chat(*args, **kwargs)
 
     def summarize(self, text: str, *, instruction: str) -> str:
+        from zipka.ai_activity import announce_ai
+
+        announce_ai(
+            "выжимка",
+            f"роль={self._role}",
+            f"модель={self.model_name or '?'}",
+            f"backend={self.backend}",
+        )
         with self._router._lock:
             return self._router._activate(self._role).summarize(
                 text, instruction=instruction
@@ -158,6 +174,10 @@ class LlmRouter:
             and hasattr(other, "unload")
             and self._active_role == other_role
         ):
+            from zipka.ai_activity import announce_ai
+
+            other_name = getattr(other, "model_name", None) or other_role
+            announce_ai("выгрузка", f"роль={other_role}", f"модель={other_name}")
             try:
                 other.unload()
             except Exception:
@@ -173,6 +193,13 @@ class LlmRouter:
 
     def preload_chat(self) -> None:
         """Фоновый прогрев чатовой модели после code-роли."""
+        from zipka.ai_activity import announce_ai
+
+        announce_ai(
+            "прогрев",
+            "роль=chat",
+            f"модель={self.chat_llm.model_name or '?'}",
+        )
         with self._lock:
             client = self._activate("chat")
             ensure = getattr(client, "_ensure_loaded", None)

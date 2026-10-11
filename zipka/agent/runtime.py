@@ -117,6 +117,9 @@ def unload_inference_models(agent: Any) -> None:
                 pass
     gc.collect()
     try:
+        from zipka.torch_compat import quiet_torch_noise
+
+        quiet_torch_noise()
         import torch
 
         if torch.cuda.is_available():

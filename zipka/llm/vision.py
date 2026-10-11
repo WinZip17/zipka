@@ -264,6 +264,7 @@ class VisionGgufClient:
 
         self.unload()
         from llama_cpp import Llama
+        from zipka.ai_activity import announce_ai
 
         handler = _make_handler(pair["handler"], pair["mmproj_path"])
         n_gpu = int(resolve_gpu_layers(self.settings))
@@ -275,6 +276,12 @@ class VisionGgufClient:
         want_ctx = max(2048, int(self.settings.zipka_gguf_ctx))
         if pair["handler"] == "moondream2":
             want_ctx = 2048
+        announce_ai(
+            "загрузка vision",
+            pair.get("filename") or pair.get("label") or "vision",
+            f"gpu_layers={n_gpu}",
+            f"ctx={want_ctx}",
+        )
         kwargs: dict[str, Any] = {
             "model_path": str(pair["model_path"]),
             "chat_handler": handler,
@@ -297,6 +304,9 @@ class VisionGgufClient:
         image_b64: str,
         prompt: str = "Что ты видишь? Опиши кратко по-русски.",
     ) -> str:
+        from zipka.ai_activity import announce_ai
+
+        announce_ai("зрение", "описание кадра")
         llm = self._ensure_loaded()
         raw = (image_b64 or "").strip()
         if raw.startswith("data:"):
@@ -321,6 +331,8 @@ class VisionGgufClient:
             },
         ]
         try:
+            name = (self._pair or {}).get("filename") or "vision"
+            announce_ai("инференс vision", name)
             out = llm.create_chat_completion(
                 messages=messages,
                 max_tokens=min(512, int(self.settings.zipka_gguf_max_tokens or 512)),

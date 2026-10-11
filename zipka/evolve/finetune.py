@@ -687,6 +687,14 @@ class FinetuneEvolve:
         }
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+        from zipka.ai_activity import announce_ai
+
+        announce_ai(
+            "дообучение",
+            f"job={job.get('id')}",
+            f"gen={job.get('generation')}",
+            "старт worker",
+        )
         proc = subprocess.Popen(worker_cmd, **kwargs)
         self._write_status(
             {

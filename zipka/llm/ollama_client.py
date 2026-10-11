@@ -104,6 +104,14 @@ class OllamaClient:
             pass
         if options:
             payload["options"] = options
+        from zipka.ai_activity import announce_ai
+
+        announce_ai(
+            "инференс Ollama",
+            model,
+            f"msgs={len(payload_messages)}",
+            "stream" if stream else "sync",
+        )
         try:
             with httpx.Client(timeout=180.0) as client:
                 if stream:

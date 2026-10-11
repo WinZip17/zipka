@@ -215,6 +215,15 @@ class GgufClient:
             apply_cuda_device_preference(
                 mode=str(load_runtime(self.settings).get("compute_mode") or "gpu")
             )
+        from zipka.ai_activity import announce_ai
+
+        announce_ai(
+            "загрузка GGUF",
+            self.model_name,
+            f"gpu_layers={want_gpu}",
+            f"ctx={want_ctx}",
+            f"threads={want_threads}",
+        )
         kwargs: dict[str, Any] = {
             "model_path": str(self.model_path),
             "n_ctx": want_ctx,
@@ -356,6 +365,14 @@ class GgufClient:
             seed = int(sampling["seed"])
             if seed >= 0:
                 kwargs["seed"] = seed
+            from zipka.ai_activity import announce_ai
+
+            announce_ai(
+                "инференс",
+                self.model_name,
+                f"max_tokens={out_tokens}",
+                f"temp={temp}",
+            )
             # Qwen3: thinking по runtime (в чате блоки всё равно срезает strip_thinking)
             try:
                 result = llm.create_chat_completion(
