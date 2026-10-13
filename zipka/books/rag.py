@@ -30,15 +30,18 @@ MAX_CONTEXT_CHARS = 14_000
 
 _embedder: Any = None
 _embedder_name: str | None = None
+_rag_pkg_available: bool | None = None
 
 
 def rag_available() -> bool:
-    try:
-        import sentence_transformers  # noqa: F401
+    """Пакет sentence-transformers установлен? Без import (он тянет torch ~десятки секунд)."""
+    global _rag_pkg_available
+    if _rag_pkg_available is not None:
+        return _rag_pkg_available
+    import importlib.util
 
-        return True
-    except ImportError:
-        return False
+    _rag_pkg_available = importlib.util.find_spec("sentence_transformers") is not None
+    return _rag_pkg_available
 
 
 def embed_batch_size() -> int:
