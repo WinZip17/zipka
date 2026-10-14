@@ -65,6 +65,7 @@ def _news_scheduler_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    logging.getLogger("zipka.news").setLevel(logging.INFO)
     try:
         mode = str(load_runtime().get("compute_mode") or "cpu")
         if mode != "cpu":

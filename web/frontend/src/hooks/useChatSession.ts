@@ -44,6 +44,8 @@ export function useChatSession() {
   const sawServerPendingRef = useRef(false);
   const messagesRef = useRef<Bubble[]>([]);
   const pingInFlightRef = useRef(false);
+  /** Последний увиденный auto-ingest `at`; undefined = ещё не инициализировали. */
+  const seenNewsResultAtRef = useRef<string | null | undefined>(undefined);
 
   const addBubble = useCallback(
     (
@@ -128,6 +130,25 @@ export function useChatSession() {
       return null;
     }
   }, [queryClient]);
+
+  // Авто-обновление ленты → то же сообщение в чат, что и при ручном ingest
+  useEffect(() => {
+    const last = newsQuery.data?.last_result;
+    const at = last?.at ?? null;
+    if (seenNewsResultAtRef.current === undefined) {
+      seenNewsResultAtRef.current = at;
+      return;
+    }
+    if (!at || at === seenNewsResultAtRef.current) return;
+    seenNewsResultAtRef.current = at;
+    const text =
+      (typeof last?.message === "string" && last.message.trim()) ||
+      (last?.error
+        ? `Не смогла обновить новости: ${last.error}`
+        : `Обновила новости: +${last?.added ?? 0} выдержек.`);
+    addBubble(text, "bot");
+    void refreshStatus();
+  }, [newsQuery.data?.last_result, addBubble, refreshStatus]);
 
   useEffect(() => {
     hasMoreRef.current = hasMore;

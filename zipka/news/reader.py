@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import threading
 import xml.etree.ElementTree as ET
@@ -15,6 +16,8 @@ from bs4 import BeautifulSoup
 
 from zipka.config import Settings, ensure_data_dirs, get_settings
 from zipka.memory.store import MemoryStore
+
+_log = logging.getLogger("zipka.news")
 
 _UA = (
     "Mozilla/5.0 (compatible; ZipkaNews/0.1; +https://github.com/local/zipka)"
@@ -480,23 +483,56 @@ class NewsDesk:
         try:
             rss_urls = [d["id"] for d in due if d["kind"] == "rss"]
             tg_ids = [d["id"] for d in due if d["kind"] == "telegram"]
+            _log.info(
+                "news auto ingest due=%d rss=%d tg=%d",
+                len(due),
+                len(rss_urls),
+                len(tg_ids),
+            )
             result = self.ingest(rss_urls=rss_urls, telegram_ids=tg_ids)
             result["auto"] = True
             result["due"] = due
+            added = int(result.get("added") or 0)
+            sample = None
+            items = result.get("items") or []
+            if items:
+                it0 = items[0] if isinstance(items[0], dict) else {}
+                src = str(it0.get("source") or "").strip()
+                title = str(it0.get("title") or "").strip()
+                if src or title:
+                    sample = f"{src}: {title}".strip(": ").strip()
+            msg = f"Обновила новости: +{added} выдержек."
+            if sample:
+                msg = f"{msg}\nПример: {sample}"
+            errs = result.get("errors") or []
+            if errs:
+                msg = f"{msg}\nОшибки: {'; '.join(str(e) for e in errs[:3])}"
             self._last_auto_result = {
                 "at": _utc_iso(),
-                "added": result.get("added"),
-                "errors": result.get("errors"),
+                "added": added,
+                "errors": errs,
+                "sample": sample,
+                "message": msg,
             }
             self._pending_after_chat = False
             return result
         except RuntimeError as exc:
             if "уже идёт" in str(exc).lower():
                 return None
-            self._last_auto_result = {"at": _utc_iso(), "error": str(exc)}
+            err = str(exc)
+            self._last_auto_result = {
+                "at": _utc_iso(),
+                "error": err,
+                "message": f"Не смогла обновить новости: {err}",
+            }
             raise
         except Exception as exc:
-            self._last_auto_result = {"at": _utc_iso(), "error": str(exc)}
+            err = str(exc)
+            self._last_auto_result = {
+                "at": _utc_iso(),
+                "error": err,
+                "message": f"Не смогла обновить новости: {err}",
+            }
             raise
 
     def known_ids(self) -> set[str]:
@@ -530,14 +566,25 @@ class NewsDesk:
         return self.store.stats()
 
     def _http_get(self, url: str, *, timeout: float = 45.0) -> str:
-        with httpx.Client(
-            follow_redirects=True,
-            timeout=timeout,
-            headers={"User-Agent": _UA, "Accept": "*/*"},
-        ) as client:
-            res = client.get(url)
-            res.raise_for_status()
-            return res.text
+        try:
+            with httpx.Client(
+                follow_redirects=True,
+                timeout=timeout,
+                headers={"User-Agent": _UA, "Accept": "*/*"},
+            ) as client:
+                res = client.get(url)
+                res.raise_for_status()
+                return res.text
+        except httpx.TimeoutException as exc:
+            _log.warning("news HTTP timeout %s: %s", url, exc)
+            raise
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else "?"
+            _log.warning("news HTTP %s %s", code, url)
+            raise
+        except httpx.HTTPError as exc:
+            _log.warning("news HTTP fail %s: %s", url, exc)
+            raise
 
     def _local_tag(self, tag: str) -> str:
         if "}" in tag:
@@ -758,21 +805,32 @@ class NewsDesk:
             errors: list[str] = []
             fetched_keys: list[str] = []
 
+            _log.info(
+                "news ingest start rss=%d tg=%d",
+                len(rss_list),
+                len(tg_list),
+            )
             candidates: list[dict[str, Any]] = []
             for feed in rss_list:
                 try:
-                    candidates.extend(self.fetch_rss_entries(feed, limit=per_source))
+                    entries = self.fetch_rss_entries(feed, limit=per_source)
+                    candidates.extend(entries)
                     fetched_keys.append(_rss_key(feed))
+                    _log.info("news RSS ok %s (+%d)", feed, len(entries))
                 except Exception as exc:
                     errors.append(f"RSS {feed}: {exc}")
+                    _log.warning("news RSS fail %s: %s", feed, exc)
             for channel in tg_list:
                 try:
-                    candidates.extend(
-                        self.fetch_telegram_entries(channel, limit=per_source)
+                    entries = self.fetch_telegram_entries(
+                        channel, limit=per_source
                     )
+                    candidates.extend(entries)
                     fetched_keys.append(_tg_key(channel))
+                    _log.info("news TG ok @%s (+%d)", channel, len(entries))
                 except Exception as exc:
                     errors.append(f"TG @{channel}: {exc}")
+                    _log.warning("news TG fail @%s: %s", channel, exc)
 
             for cand in candidates:
                 if len(added) >= max_new:
@@ -824,6 +882,13 @@ class NewsDesk:
                     prune_info = self.prune_storage()
                 except Exception as exc:
                     errors.append(f"prune: {exc}")
+                    _log.warning("news prune fail: %s", exc)
+
+            _log.info(
+                "news ingest done +%d errors=%d",
+                len(added),
+                len(errors),
+            )
 
             return {
                 "ok": True,

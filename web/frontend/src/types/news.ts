@@ -34,6 +34,8 @@ export type NewsAutoStatus = {
     added?: number;
     errors?: string[];
     error?: string;
+    sample?: string | null;
+    message?: string | null;
   } | null;
   interval_options?: NewsIntervalOption[];
   source_interval_options?: NewsIntervalOption[];
