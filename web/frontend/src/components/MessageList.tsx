@@ -7,6 +7,7 @@ import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { Bubble } from "../types";
+import { MessageContent } from "./chat/MessageContent";
 
 type Props = {
   messages: Bubble[];
@@ -113,9 +114,9 @@ export function MessageList({
               px: 1.5,
               py: 1.25,
               borderRadius: 0.5,
-              whiteSpace: "pre-wrap",
               lineHeight: 1.45,
               bgcolor: m.who === "user" ? "#2a4035" : "#1b2730",
+              overflow: "hidden",
               border: m.who === "bot" ? 1 : 0,
               borderColor: "divider",
               flexShrink: 0,
@@ -154,9 +155,7 @@ export function MessageList({
                 </Typography>
               </Box>
             )}
-            <Typography component="div" variant="body2" sx={{ color: "text.primary" }}>
-              {m.text}
-            </Typography>
+            <MessageContent text={m.text} />
             <Box
               sx={{
                 mt: 0.75,
