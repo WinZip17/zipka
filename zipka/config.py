@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # pathfinder | qwen25 — какой чатовый GGUF-профиль активен (см. chat_models)
     zipka_chat_model: str = "pathfinder"
     zipka_gguf_ctx: int = 8192
-    zipka_gguf_max_tokens: int = 1024
+    zipka_gguf_max_tokens: int = 2048
     zipka_gguf_gpu_layers: int = 0  # >0 если собрали llama-cpp с GPU
     zipka_gguf_threads: int = 0  # 0 = авто
     zipka_data_dir: str = "data"

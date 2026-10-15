@@ -73,7 +73,7 @@ def try_read_url_from_message(agent: Any, text: str) -> str | None:
 
     title = result.get("title") or url
     digest = result.get("digest_path") or "—"
-    preview = (result.get("summary") or "")[:2200]
+    preview = (result.get("summary") or "")[:8000]
     from zipka.llm.sanitize import is_degenerate_generation
 
     if is_degenerate_generation(preview):
@@ -211,7 +211,7 @@ def try_read_from_message(agent: Any, text: str) -> str | None:
             )
         comment_line = f"С учётом комментария: {comment}\n" if comment else ""
         digest_preview = (result.get("overview") or result.get("digest") or "")[
-            :1200
+            :8000
         ]
         from zipka.llm.sanitize import is_degenerate_generation
 
@@ -311,7 +311,7 @@ def ingest_uploaded_book(
             dest.write_bytes(content)
             result = agent.books.read(dest, member=member, comment=comment)
             result["uploaded_path"] = str(dest)
-            preview = (result.get("digest") or "")[:1500]
+            preview = (result.get("digest") or "")[:8000]
             kind = result.get("kind") or "book"
             label = "код" if kind.startswith("code") else "файл"
             comment_line = f"Комментарий учтён: {comment}\n" if comment else ""

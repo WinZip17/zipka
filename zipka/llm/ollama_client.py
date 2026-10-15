@@ -96,7 +96,7 @@ class OllamaClient:
             options["seed"] = seed
         if max_tokens is not None:
             # Ollama: num_predict; слишком большое значение на маленьком ctx → 400
-            options["num_predict"] = max(64, min(int(max_tokens), 2048))
+            options["num_predict"] = max(64, min(int(max_tokens), 4096))
         # 0 = CPU, -1 = все слои на GPU (если Ollama собрана с CUDA)
         try:
             options["num_gpu"] = int(resolve_gpu_layers(self.settings))
@@ -179,7 +179,7 @@ class OllamaClient:
                 "content": f"{instruction}\n\n---\n{text[:12000]}",
             },
         ]
-        out = self.chat(messages)
+        out = self.chat(messages, max_tokens=2048)
         if not is_degenerate_generation(out):
             return out
         retry = [
@@ -197,7 +197,7 @@ class OllamaClient:
                 ),
             },
         ]
-        out2 = self.chat(retry)
+        out2 = self.chat(retry, max_tokens=1536)
         if not is_degenerate_generation(out2):
             return out2
         return ""

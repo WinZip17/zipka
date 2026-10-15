@@ -350,7 +350,7 @@ class GgufClient:
             if max_tokens is not None
             else int(self.settings.zipka_gguf_max_tokens)
         )
-        want_out = max(64, min(want_out, 2048))
+        want_out = max(64, min(want_out, 4096))
         n_ctx = int(getattr(llm, "n_ctx", lambda: self._desired_ctx())())
         fitted, out_tokens = self._fit_messages(
             llm, clean, n_ctx=n_ctx, max_out=want_out
@@ -413,7 +413,7 @@ class GgufClient:
                 "content": f"{instruction}\n\n---\n{text[:8000]}",
             },
         ]
-        out = self.chat(messages, max_tokens=1024)
+        out = self.chat(messages, max_tokens=2048)
         if not is_degenerate_generation(out):
             return out
         # один повтор с жёстким запретом мусора
@@ -432,7 +432,7 @@ class GgufClient:
                 ),
             },
         ]
-        out2 = self.chat(retry, max_tokens=768)
+        out2 = self.chat(retry, max_tokens=1536)
         if not is_degenerate_generation(out2):
             return out2
         return ""
